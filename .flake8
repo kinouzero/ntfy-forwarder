@@ -1,0 +1,4 @@
+[flake8]
+max-line-length = 100
+exclude = .venv,.pytest_cache,__pycache__
+ignore = E302,E305,E306,W503

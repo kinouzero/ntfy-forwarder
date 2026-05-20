@@ -1,0 +1,302 @@
+import json
+import asyncio
+import time
+import random
+from collections import deque
+
+from core.http import get_http_session
+from core.logging import log
+from core.state import (
+    aggregation_buffer,
+    shutdown_event,
+    worker_last_seen,
+    digest_buffer,
+    rate_limiters,
+    recent_events,
+    topic_stats,
+    topic_rates,
+)
+
+from core.config import (
+    NTFY_BASE_URL,
+    NTFY_TOKEN,
+    RATE_LIMIT_PER_TOPIC,
+    RATE_LIMIT_WINDOW_SECONDS,
+    MAX_AGGREGATION_BUFFER,
+    MAX_DIGEST_BUFFER,
+    DB_BATCH_SIZE,
+    DB_BATCH_FLUSH_SECONDS,
+    TOPIC_ALLOWLIST,
+    TOPIC_DENYLIST,
+    ADMIN_RECENT_EVENTS,
+)
+
+from utils.filters import passes_filters
+from utils.quiet_hours import in_quiet_hours
+from utils.rate_limit import RateLimiter
+
+from models.event import NtfyEvent
+
+from services.plugins import run_plugins
+
+from db.messages import insert_messages
+from db.topics import increment_topic_count
+from db.errors import log_error
+
+from core.metrics import (
+    ntfy_messages_total,
+    ntfy_messages_filtered_total,
+    ntfy_messages_inserted_total,
+    ntfy_messages_duplicate_total,
+    worker_errors_total,
+    rate_limited_total,
+    aggregation_dropped_total,
+    digest_dropped_total,
+    db_insert_seconds,
+    event_process_seconds,
+)
+
+async def ntfy_worker(topic):
+
+    if TOPIC_ALLOWLIST and topic not in TOPIC_ALLOWLIST:
+        log("WARN", "topic not in allowlist", topic=topic)
+        return
+    if TOPIC_DENYLIST and topic in TOPIC_DENYLIST:
+        log("WARN", "topic in denylist", topic=topic)
+        return
+
+    headers = {}
+
+    if NTFY_TOKEN:
+        headers["Authorization"] = (
+            f"Bearer {NTFY_TOKEN}"
+        )
+
+    url = f"{NTFY_BASE_URL}/{topic}/json"
+
+    backoff = 1
+    buffer = []
+    last_flush = time.monotonic()
+    topic_stats.setdefault(
+        topic,
+        {
+            "received": 0,
+            "filtered": 0,
+            "rate_limited": 0,
+            "inserted": 0,
+            "errors": 0,
+        },
+    )
+    recent_events.setdefault(
+        topic,
+        deque(maxlen=ADMIN_RECENT_EVENTS),
+    )
+    topic_rates.setdefault(
+        topic,
+        deque(maxlen=60),
+    )
+
+    async def flush_buffer():
+        nonlocal buffer, last_flush
+        if not buffer:
+            return
+
+        raws = [raw for raw, _evt in buffer]
+        events = [_evt for _raw, _evt in buffer]
+
+        start = time.monotonic()
+        inserted = await insert_messages(
+            topic,
+            raws,
+        )
+        db_insert_seconds.labels(
+            operation="batch" if len(raws) > 1 else "single"
+        ).observe(time.monotonic() - start)
+        inserted_count = sum(1 for ok in inserted if ok)
+        log(
+            "DEBUG",
+            "db flush",
+            topic=topic,
+            buffered=len(buffer),
+            inserted=inserted_count,
+        )
+
+        for ok, evt in zip(inserted, events):
+            if not ok:
+                ntfy_messages_duplicate_total.labels(
+                    topic=topic
+                ).inc()
+                continue
+
+            ntfy_messages_inserted_total.labels(
+                topic=topic
+            ).inc()
+            topic_stats[topic]["inserted"] += 1
+
+            await increment_topic_count(
+                topic
+            )
+
+            evt = await run_plugins(
+                evt
+            )
+
+            aggregation_buffer.setdefault(
+                topic,
+                []
+            ).append(evt)
+            if (
+                len(aggregation_buffer[topic])
+                > MAX_AGGREGATION_BUFFER
+            ):
+                aggregation_buffer[topic].pop(0)
+                aggregation_dropped_total.labels(
+                    topic=topic
+                ).inc()
+
+            if topic in digest_buffer or (
+                len(digest_buffer) < MAX_DIGEST_BUFFER
+            ):
+                digest_buffer[topic] = (
+                    digest_buffer.get(topic, 0) + 1
+                )
+            else:
+                digest_dropped_total.labels(
+                    topic=topic
+                ).inc()
+
+            recent_events[topic].append(
+                {
+                    "ts": int(time.time()),
+                    "message": evt.message,
+                    "priority": evt.priority,
+                    "event_id": evt.event_id,
+                    "title": evt.title,
+                    "tags": evt.tags,
+                }
+            )
+
+        buffer = []
+        last_flush = time.monotonic()
+
+    log("INFO", "ntfy worker started", topic=topic)
+
+    while not shutdown_event.is_set():
+
+        try:
+
+            session = get_http_session()
+            if session is None:
+                await asyncio.sleep(1)
+                continue
+
+            log("DEBUG", "ntfy connecting", topic=topic, url=url)
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=None,
+            ) as resp:
+
+                async for line in resp.content:
+
+                    if not line:
+                        continue
+
+                    raw = json.loads(
+                        line.decode().strip()
+                    )
+
+                    if raw.get("event") != "message":
+                        continue
+
+                    worker_last_seen[topic] = int(time.time())
+                    ntfy_messages_total.labels(topic=topic).inc()
+                    topic_stats[topic]["received"] += 1
+                    start_time = time.monotonic()
+
+                    event = NtfyEvent.from_json(
+                        topic,
+                        raw,
+                    )
+
+                    if not passes_filters(
+                        event.message
+                    ):
+                        log("DEBUG", "filtered", topic=topic, reason="filter")
+                        ntfy_messages_filtered_total.labels(
+                            topic=topic,
+                            reason="filter",
+                        ).inc()
+                        topic_stats[topic]["filtered"] += 1
+                        continue
+
+                    if (
+                        in_quiet_hours()
+                        and event.priority < 4
+                    ):
+                        log("DEBUG", "filtered", topic=topic, reason="quiet_hours")
+                        ntfy_messages_filtered_total.labels(
+                            topic=topic,
+                            reason="quiet_hours",
+                        ).inc()
+                        topic_stats[topic]["filtered"] += 1
+                        continue
+
+                    if RATE_LIMIT_PER_TOPIC > 0:
+                        limiter = rate_limiters.setdefault(
+                            topic,
+                            RateLimiter(
+                                RATE_LIMIT_PER_TOPIC,
+                                RATE_LIMIT_WINDOW_SECONDS,
+                            ),
+                        )
+                        if not limiter.allow():
+                            log("DEBUG", "rate_limited", topic=topic)
+                            rate_limited_total.labels(
+                                topic=topic
+                            ).inc()
+                            ntfy_messages_filtered_total.labels(
+                                topic=topic,
+                                reason="rate_limit",
+                            ).inc()
+                            topic_stats[topic]["rate_limited"] += 1
+                            continue
+
+                    buffer.append((raw, event))
+
+                    if (
+                        len(buffer) >= DB_BATCH_SIZE
+                        or time.monotonic() - last_flush
+                        >= DB_BATCH_FLUSH_SECONDS
+                    ):
+                        await flush_buffer()
+
+                    event_process_seconds.labels(
+                        topic=topic
+                    ).observe(time.monotonic() - start_time)
+
+                    topic_rates[topic].append(
+                        int(time.time())
+                    )
+
+                backoff = 1
+                if buffer:
+                    await flush_buffer()
+
+        except Exception as e:
+
+            await log_error(
+                "ntfy_worker",
+                topic,
+                e,
+            )
+            worker_errors_total.labels(
+                component="ntfy_worker"
+            ).inc()
+            topic_stats[topic]["errors"] += 1
+
+            log("WARN", "ntfy worker error", topic=topic, error=str(e))
+            await asyncio.sleep(
+                min(backoff, 60) + random.random()
+            )
+            backoff = min(backoff * 2, 60)
