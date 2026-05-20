@@ -211,7 +211,15 @@ async def admin_page(request):
                   .filter(x => x)
                   .map(x => parseInt(x, 10));
                 if (values.length) {{
-                  sp.innerText = values.map(v => v ? '▇' : '▁').join('');
+                  const max = Math.max(...values, 1);
+                  const chars = ['▁','▂','▃','▄','▅','▆','▇'];
+                  sp.innerText = values.map(v => {{
+                    const idx = Math.min(
+                      chars.length - 1,
+                      Math.floor((v / max) * (chars.length - 1))
+                    );
+                    return chars[idx];
+                  }}).join('');
                 }}
               }}
               tbody.appendChild(tr);
@@ -374,13 +382,14 @@ async def topics_list(request):
     for r in rows:
         name = r["name"]
         stats = topic_stats.get(name, {})
-        rates = topic_rates.get(name, [])
+        recent = recent_events.get(name, [])
         rate_60s = 0
-        if rates:
+        if recent:
             now = int(time.time())
             rate_60s = sum(
-                1 for ts in rates if now - ts <= 60
+                1 for e in recent if now - e["ts"] <= 60
             )
+        rates = topic_rates.get(name, [])
         items.append({
             "name": name,
             "enabled": bool(r["enabled"]),
