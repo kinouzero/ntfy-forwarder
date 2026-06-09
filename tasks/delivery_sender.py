@@ -3,7 +3,7 @@ import traceback
 
 from core.state import telegram_queue, shutdown_event
 from core.config import (
-    DELIVERY_TARGETS,
+    ACTIVE_TARGETS,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     TELEGRAM_QUEUE_MAX_ATTEMPTS,
     TELEGRAM_QUEUE_BASE_RETRY_SECONDS,
@@ -94,7 +94,7 @@ async def send_whatsapp_message(message, attachment_url=None, priority=3):
 
 
 def _targets():
-    return [t for t in DELIVERY_TARGETS if t]
+    return [t for t in ACTIVE_TARGETS if t]
 
 
 def _unpack_queue_item(item):

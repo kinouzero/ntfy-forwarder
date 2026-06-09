@@ -9,43 +9,8 @@ def test_validate_config_requires_ntfy(monkeypatch):
         app.validate_config()
 
 
-def test_validate_config_requires_telegram_when_enabled(monkeypatch):
-    with pytest.raises(RuntimeError):
-        monkeypatch.setattr(app, "NTFY_BASE_URL", "http://ntfy")
-        monkeypatch.setattr(app, "DELIVERY_TARGETS", ("telegram",))
-        monkeypatch.setattr(app, "TG_TOKEN", "")
-        monkeypatch.setattr(app, "TG_ADMIN", "")
-        app.validate_config()
-
-
-def test_validate_config_allows_telegram_disabled(monkeypatch):
+def test_validate_config_allows_targets_autodetection(monkeypatch):
     monkeypatch.setattr(app, "NTFY_BASE_URL", "http://ntfy")
-    monkeypatch.setattr(app, "DELIVERY_TARGETS", ())
-    monkeypatch.setattr(app, "TG_TOKEN", "")
-    monkeypatch.setattr(app, "TG_ADMIN", "")
-    app.validate_config()
-
-
-def test_validate_config_requires_discord_webhook(monkeypatch):
-    with pytest.raises(RuntimeError):
-        monkeypatch.setattr(app, "NTFY_BASE_URL", "http://ntfy")
-        monkeypatch.setattr(app, "DELIVERY_TARGETS", ("discord",))
-        monkeypatch.setattr(app, "DISCORD_WEBHOOK_URL", "")
-        app.validate_config()
-
-
-def test_validate_config_requires_slack_webhook(monkeypatch):
-    with pytest.raises(RuntimeError):
-        monkeypatch.setattr(app, "NTFY_BASE_URL", "http://ntfy")
-        monkeypatch.setattr(app, "DELIVERY_TARGETS", ("slack",))
-        monkeypatch.setattr(app, "SLACK_WEBHOOK_URL", "")
-        app.validate_config()
-
-
-def test_validate_config_accepts_generic_webhook_target(monkeypatch):
-    monkeypatch.setattr(app, "NTFY_BASE_URL", "http://ntfy")
-    monkeypatch.setattr(app, "DELIVERY_TARGETS", ("webhook",))
-    monkeypatch.setattr(app, "GENERIC_WEBHOOK_URL", "https://example.invalid/hook")
     app.validate_config()
 
 

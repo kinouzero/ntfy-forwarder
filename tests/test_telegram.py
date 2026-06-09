@@ -79,6 +79,7 @@ async def test_tg_call_requires_token(monkeypatch):
 @pytest.mark.asyncio
 async def test_process_message_success(monkeypatch):
     from tasks import delivery_sender as telegram_sender
+    monkeypatch.setattr(telegram_sender, "ACTIVE_TARGETS", ("telegram",))
 
     async def ok_send(_m, attachment_url=None, priority=3):
         return None
@@ -97,6 +98,7 @@ async def test_process_message_success(monkeypatch):
 async def test_process_message_retries_and_fails(monkeypatch):
     from tasks import delivery_sender as telegram_sender
     from services.telegram import TelegramAPIError
+    monkeypatch.setattr(telegram_sender, "ACTIVE_TARGETS", ("telegram",))
 
     monkeypatch.setattr(
         telegram_sender,

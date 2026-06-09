@@ -24,9 +24,17 @@ from core.metrics import telegram_dead_letter_size
 from core.config import ADMIN_TOKEN
 from core.config import TOPIC_ALLOWLIST, TOPIC_DENYLIST
 from core.config import ADMIN_RECENT_EVENTS
-from core.config import TELEGRAM_ENABLED
-from core.config import HEALTH_TELEGRAM_CHECK_ENABLED
+from core.config import ACTIVE_TARGETS
+from core.config import GENERIC_WEBHOOK_URL
+from core.config import GENERIC_WEBHOOK_AUTH_HEADER
+from core.config import DISCORD_WEBHOOK_URL
+from core.config import SLACK_WEBHOOK_URL
+from core.config import WHATSAPP_API_BASE
+from core.config import WHATSAPP_API_VERSION
+from core.config import WHATSAPP_PHONE_NUMBER_ID
+from core.config import WHATSAPP_ACCESS_TOKEN
 from core.logging import log
+from core.http import get_http_session
 from db.topics import (
     list_topics,
     set_topic_enabled,
@@ -50,12 +58,7 @@ from db.client import db
 from services.telegram import tg_call
 from services.ntfy import ntfy_worker
 
-_HEALTH_TG_CACHE = {
-    "ts": 0,
-    "ok": None,
-    "latency_ms": None,
-    "error": None,
-}
+_HEALTH_TARGET_CACHE = {}
 
 def _get_admin_token(request):
     return (
@@ -174,40 +177,78 @@ async def health(request):
             stale_workers += 1
     max_worker_age = max(worker_ages.values()) if worker_ages else 0
 
-    tg_status = {
-        "enabled": bool(TELEGRAM_ENABLED and HEALTH_TELEGRAM_CHECK_ENABLED),
-        "ok": None,
-        "latency_ms": None,
-        "error": None,
-    }
-    if tg_status["enabled"]:
-        if now - int(_HEALTH_TG_CACHE["ts"]) >= 30:
-            start = time.monotonic()
-            try:
+    async def check_target(target):
+        cache = _HEALTH_TARGET_CACHE.setdefault(
+            target,
+            {"ts": 0, "ok": None, "latency_ms": None, "error": None},
+        )
+        if now - int(cache["ts"]) < 30:
+            return dict(cache)
+        start = time.monotonic()
+        ok = False
+        err = None
+        try:
+            if target == "telegram":
                 await tg_call("getMe", {})
-                _HEALTH_TG_CACHE.update(
-                    {
-                        "ts": now,
-                        "ok": True,
-                        "latency_ms": int((time.monotonic() - start) * 1000),
-                        "error": None,
-                    }
-                )
-            except Exception as exc:
-                _HEALTH_TG_CACHE.update(
-                    {
-                        "ts": now,
-                        "ok": False,
-                        "latency_ms": int((time.monotonic() - start) * 1000),
-                        "error": str(exc),
-                    }
-                )
-        tg_status["ok"] = _HEALTH_TG_CACHE["ok"]
-        tg_status["latency_ms"] = _HEALTH_TG_CACHE["latency_ms"]
-        tg_status["error"] = _HEALTH_TG_CACHE["error"]
+                ok = True
+            else:
+                session = get_http_session()
+                if session is None:
+                    raise RuntimeError("HTTP session not ready")
+                if target == "webhook":
+                    url = GENERIC_WEBHOOK_URL
+                    headers = (
+                        {"Authorization": GENERIC_WEBHOOK_AUTH_HEADER}
+                        if GENERIC_WEBHOOK_AUTH_HEADER
+                        else None
+                    )
+                elif target == "discord":
+                    url = DISCORD_WEBHOOK_URL
+                    headers = None
+                elif target == "slack":
+                    url = SLACK_WEBHOOK_URL
+                    headers = None
+                elif target == "whatsapp":
+                    url = (
+                        f"{WHATSAPP_API_BASE}/{WHATSAPP_API_VERSION}/"
+                        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
+                    )
+                    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+                else:
+                    raise RuntimeError(f"unknown target: {target}")
+                async with session.options(url, headers=headers, timeout=10) as resp:
+                    ok = int(resp.status) < 500
+                    if not ok:
+                        err = f"http_{resp.status}"
+        except Exception as exc:
+            ok = False
+            err = str(exc)
+        cache.update(
+            {
+                "ts": now,
+                "ok": ok,
+                "latency_ms": int((time.monotonic() - start) * 1000),
+                "error": err,
+            }
+        )
+        return dict(cache)
+
+    target_checks = {}
+    for target in ACTIVE_TARGETS:
+        chk = await check_target(target)
+        target_checks[target] = {
+            "enabled": True,
+            "ok": chk["ok"],
+            "latency_ms": chk["latency_ms"],
+            "error": chk["error"],
+        }
 
     status = "ok"
-    if not db_ok or stale_workers > 0:
+    any_target_failed = any(
+        c["enabled"] and c["ok"] is False
+        for c in target_checks.values()
+    )
+    if not db_ok or stale_workers > 0 or any_target_failed:
         status = "degraded"
     return web.json_response({
         "status": status,
@@ -216,7 +257,7 @@ async def health(request):
         "dead_letters": dead_count,
         "checks": {
             "db_writable": {"ok": db_ok, "error": db_error},
-            "telegram": tg_status,
+            "targets": target_checks,
             "workers": {
                 "stale": stale_workers,
                 "max_last_seen_age_seconds": max_worker_age,

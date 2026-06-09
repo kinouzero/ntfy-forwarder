@@ -18,8 +18,7 @@ async def test_health_returns_status_and_counts(monkeypatch):
     async def _dead():
         return 0
     monkeypatch.setattr("api.web.count_dead_letters", _dead)
-    monkeypatch.setattr("api.web.HEALTH_TELEGRAM_CHECK_ENABLED", False)
-    monkeypatch.setattr("api.web.TELEGRAM_ENABLED", False)
+    monkeypatch.setattr("api.web.ACTIVE_TARGETS", ())
 
     class _Conn:
         async def execute(self, *_a, **_kw):
@@ -58,8 +57,7 @@ async def test_health_degraded_when_db_fails(monkeypatch):
         return 0
     monkeypatch.setattr("api.web.count_telegram_queue", _count)
     monkeypatch.setattr("api.web.count_dead_letters", _count)
-    monkeypatch.setattr("api.web.HEALTH_TELEGRAM_CHECK_ENABLED", False)
-    monkeypatch.setattr("api.web.TELEGRAM_ENABLED", False)
+    monkeypatch.setattr("api.web.ACTIVE_TARGETS", ())
 
     async def _db():
         raise RuntimeError("db down")

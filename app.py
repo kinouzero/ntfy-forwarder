@@ -16,20 +16,12 @@ from core.http import (
 
 from core.config import (
     BOOTSTRAP_TOPICS,
-    TG_TOKEN,
-    TG_ADMIN,
     NTFY_BASE_URL,
     TOPIC_ALLOWLIST,
     TOPIC_DENYLIST,
     LOG_LEVEL,
     TZ,
-    DELIVERY_TARGETS,
-    GENERIC_WEBHOOK_URL,
-    DISCORD_WEBHOOK_URL,
-    SLACK_WEBHOOK_URL,
-    WHATSAPP_PHONE_NUMBER_ID,
-    WHATSAPP_ACCESS_TOKEN,
-    WHATSAPP_TO,
+    ACTIVE_TARGETS,
 )
 
 from db.schema import init_db
@@ -54,24 +46,6 @@ running_tasks = []
 def validate_config():
     if not NTFY_BASE_URL:
         raise RuntimeError("NTFY_BASE_URL is not set")
-
-    if "telegram" in DELIVERY_TARGETS:
-        if not TG_TOKEN or not TG_ADMIN:
-            raise RuntimeError(
-                "TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID not set"
-            )
-
-    if "webhook" in DELIVERY_TARGETS and not GENERIC_WEBHOOK_URL:
-        raise RuntimeError("GENERIC_WEBHOOK_URL not set")
-    if "discord" in DELIVERY_TARGETS and not DISCORD_WEBHOOK_URL:
-        raise RuntimeError("DISCORD_WEBHOOK_URL not set")
-    if "slack" in DELIVERY_TARGETS and not SLACK_WEBHOOK_URL:
-        raise RuntimeError("SLACK_WEBHOOK_URL not set")
-    if "whatsapp" in DELIVERY_TARGETS:
-        if not WHATSAPP_PHONE_NUMBER_ID or not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_TO:
-            raise RuntimeError(
-                "WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN / WHATSAPP_TO not set"
-            )
 
 
 def topic_allowed(topic):
@@ -134,11 +108,13 @@ async def main():
 
     await create_http_session()
 
-    if not DELIVERY_TARGETS:
+    if not ACTIVE_TARGETS:
         log(
             "WARN",
             "all delivery targets disabled",
         )
+    else:
+        log("INFO", "active targets", targets=list(ACTIVE_TARGETS))
 
     await load_plugins()
 
@@ -146,7 +122,7 @@ async def main():
 
     background_tasks = []
 
-    if DELIVERY_TARGETS:
+    if ACTIVE_TARGETS:
         background_tasks.append(
             asyncio.create_task(
                 delivery_sender_loop()

@@ -32,15 +32,18 @@ webhook generic) avec aggregation, digest, retention, et UI admin.
 
 ### Essentielles
 1. `NTFY_BASE_URL` (defaut `http://ntfy`)
-2. `DELIVERY_TARGETS` (defaut `telegram` si `TELEGRAM_ENABLED=true`, ex:
-   `telegram,discord,slack,whatsapp,webhook`)
-3. `TELEGRAM_ENABLED` (retrocompat, utilise si `DELIVERY_TARGETS` absent)
-4. `TELEGRAM_BOT_TOKEN` (requis si `telegram` est dans `DELIVERY_TARGETS`)
-5. `TELEGRAM_ADMIN_CHAT_ID` (requis si `telegram` est dans `DELIVERY_TARGETS`)
-6. `ADMIN_TOKEN` (requis pour l'UI admin)
-7. `ADMIN_RECENT_EVENTS` (defaut `50`)
-8. `TZ` (defaut `UTC`)
-9. `LOG_LEVEL` (defaut `INFO`)
+2. `ADMIN_TOKEN` (requis pour l'UI admin)
+3. `ADMIN_RECENT_EVENTS` (defaut `50`)
+4. `TZ` (defaut `UTC`)
+5. `LOG_LEVEL` (defaut `INFO`)
+
+### Targets
+1. Auto-detection: une target est active si ses variables sont presentes.
+2. Telegram: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID`
+3. Discord: `DISCORD_WEBHOOK_URL`
+4. Slack: `SLACK_WEBHOOK_URL`
+5. Webhook generic: `GENERIC_WEBHOOK_URL` (+ `GENERIC_WEBHOOK_AUTH_HEADER` optionnel)
+6. WhatsApp: `WHATSAPP_PHONE_NUMBER_ID` + `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_TO`
 
 ### Topics
 1. `BOOTSTRAP_TOPICS`
@@ -77,28 +80,19 @@ webhook generic) avec aggregation, digest, retention, et UI admin.
 1. `DB_BATCH_SIZE` (defaut `1`)
 2. `DB_BATCH_FLUSH_SECONDS` (defaut `1`)
 
-### Telegram
-1. `TELEGRAM_MAX_MESSAGE_LENGTH` (defaut `4096`)
-2. `TELEGRAM_QUEUE_MAX_ATTEMPTS` (defaut `8`)
-3. `TELEGRAM_QUEUE_BASE_RETRY_SECONDS` (defaut `5`)
-4. `TELEGRAM_QUEUE_MAX_RETRY_SECONDS` (defaut `300`)
-
-### Discord
-1. `DISCORD_WEBHOOK_URL` (requis si `discord` cible active)
-
-### Slack
-1. `SLACK_WEBHOOK_URL` (requis si `slack` cible active)
-
-### Webhook generic
-1. `GENERIC_WEBHOOK_URL` (requis si `webhook` cible active)
-2. `GENERIC_WEBHOOK_AUTH_HEADER` (optionnel, ex: `Bearer ...`)
-
-### WhatsApp Cloud API
-1. `WHATSAPP_PHONE_NUMBER_ID` (requis si `whatsapp` cible active)
-2. `WHATSAPP_ACCESS_TOKEN` (requis si `whatsapp` cible active)
-3. `WHATSAPP_TO` (requis si `whatsapp` cible active)
-4. `WHATSAPP_API_BASE` (defaut `https://graph.facebook.com`)
-5. `WHATSAPP_API_VERSION` (defaut `v23.0`)
+### Targets config
+1. `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID` (telegram)
+2. `TELEGRAM_MAX_MESSAGE_LENGTH` (defaut `4096`)
+3. `DISCORD_WEBHOOK_URL` (discord)
+4. `SLACK_WEBHOOK_URL` (slack)
+5. `GENERIC_WEBHOOK_URL` (webhook)
+6. `GENERIC_WEBHOOK_AUTH_HEADER` (optionnel)
+7. `WHATSAPP_PHONE_NUMBER_ID` + `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_TO` (whatsapp)
+8. `WHATSAPP_API_BASE` (defaut `https://graph.facebook.com`)
+9. `WHATSAPP_API_VERSION` (defaut `v23.0`)
+10. `TELEGRAM_QUEUE_MAX_ATTEMPTS` (defaut `8`, retry global sender)
+11. `TELEGRAM_QUEUE_BASE_RETRY_SECONDS` (defaut `5`, retry global sender)
+12. `TELEGRAM_QUEUE_MAX_RETRY_SECONDS` (defaut `300`, retry global sender)
 
 ### Maintenance DB
 1. `DB_MAINTENANCE_INTERVAL_SECONDS` (defaut `3600`)
@@ -107,7 +101,6 @@ webhook generic) avec aggregation, digest, retention, et UI admin.
 1. `DAILY_SUMMARY_ENABLED` (defaut `true`)
 2. `DAILY_SUMMARY_HOUR` (defaut `8`)
 3. `DAILY_SUMMARY_MINUTE` (defaut `0`)
-4. `HEALTH_TELEGRAM_CHECK_ENABLED` (defaut `true`)
 
 ## Notes
 1. La queue Telegram est persistante en SQLite (`telegram_queue`) pour reprise apres restart.
@@ -126,9 +119,10 @@ services:
       - "8081:8081"
     environment:
       NTFY_BASE_URL: "http://ntfy"
-      TELEGRAM_ENABLED: "true"
       TELEGRAM_BOT_TOKEN: "..."
       TELEGRAM_ADMIN_CHAT_ID: "123456789"
+      DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/..."
+      SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/..."
       ADMIN_TOKEN: "your-admin-token"
       BOOTSTRAP_TOPICS: "topic-a,topic-b"
       LOG_LEVEL: "INFO"

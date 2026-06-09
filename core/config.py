@@ -5,24 +5,6 @@ NTFY_TOKEN = os.getenv("NTFY_TOKEN")
 
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TG_ADMIN = os.getenv("TELEGRAM_ADMIN_CHAT_ID") or ""
-TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "true").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-
-_RAW_DELIVERY_TARGETS = os.getenv("DELIVERY_TARGETS", "").strip()
-if _RAW_DELIVERY_TARGETS:
-    DELIVERY_TARGETS = tuple(
-        t.strip().lower()
-        for t in _RAW_DELIVERY_TARGETS.split(",")
-        if t.strip()
-    )
-elif TELEGRAM_ENABLED:
-    DELIVERY_TARGETS = ("telegram",)
-else:
-    DELIVERY_TARGETS = ()
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/ntfy.db")
 
@@ -84,16 +66,6 @@ DAILY_SUMMARY_ENABLED = os.getenv("DAILY_SUMMARY_ENABLED", "true").lower() in (
 )
 DAILY_SUMMARY_HOUR = int(os.getenv("DAILY_SUMMARY_HOUR", "8"))
 DAILY_SUMMARY_MINUTE = int(os.getenv("DAILY_SUMMARY_MINUTE", "0"))
-HEALTH_TELEGRAM_CHECK_ENABLED = os.getenv(
-    "HEALTH_TELEGRAM_CHECK_ENABLED",
-    "true",
-).lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 ADMIN_RECENT_EVENTS = int(os.getenv("ADMIN_RECENT_EVENTS", "50"))
 
@@ -126,3 +98,16 @@ WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0").strip()
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
 WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
 WHATSAPP_TO = os.getenv("WHATSAPP_TO", "").strip()
+
+ACTIVE_TARGETS = tuple(
+    t for t, enabled in (
+        ("telegram", bool(TG_TOKEN and TG_ADMIN)),
+        ("webhook", bool(GENERIC_WEBHOOK_URL)),
+        ("discord", bool(DISCORD_WEBHOOK_URL)),
+        ("slack", bool(SLACK_WEBHOOK_URL)),
+        (
+            "whatsapp",
+            bool(WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN and WHATSAPP_TO),
+        ),
+    ) if enabled
+)
