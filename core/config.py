@@ -12,6 +12,18 @@ TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "true").lower() in (
     "on",
 )
 
+_RAW_DELIVERY_TARGETS = os.getenv("DELIVERY_TARGETS", "").strip()
+if _RAW_DELIVERY_TARGETS:
+    DELIVERY_TARGETS = tuple(
+        t.strip().lower()
+        for t in _RAW_DELIVERY_TARGETS.split(",")
+        if t.strip()
+    )
+elif TELEGRAM_ENABLED:
+    DELIVERY_TARGETS = ("telegram",)
+else:
+    DELIVERY_TARGETS = ()
+
 DB_PATH = os.getenv("DB_PATH", "/app/data/ntfy.db")
 
 BOOTSTRAP_TOPICS = os.getenv("BOOTSTRAP_TOPICS", "")
@@ -96,3 +108,21 @@ FILTER_EXCLUDE_REGEX = [
     if p.strip()
 ]
 FILTER_MIN_PRIORITY = int(os.getenv("FILTER_MIN_PRIORITY", "0"))
+
+GENERIC_WEBHOOK_URL = os.getenv("GENERIC_WEBHOOK_URL", "").strip()
+GENERIC_WEBHOOK_AUTH_HEADER = os.getenv(
+    "GENERIC_WEBHOOK_AUTH_HEADER",
+    "",
+).strip()
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+
+WHATSAPP_API_BASE = os.getenv(
+    "WHATSAPP_API_BASE",
+    "https://graph.facebook.com",
+).rstrip("/")
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0").strip()
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
+WHATSAPP_TO = os.getenv("WHATSAPP_TO", "").strip()

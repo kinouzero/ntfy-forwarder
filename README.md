@@ -1,6 +1,7 @@
 # Zero Notification Forwarder
 
-Service de forward ntfy -> Telegram avec aggregation, digest, retention, et UI admin.
+Service de forward ntfy vers plusieurs cibles (Telegram, Discord, Slack, WhatsApp,
+webhook generic) avec aggregation, digest, retention, et UI admin.
 
 ## Endpoints
 1. `GET /health`
@@ -31,13 +32,15 @@ Service de forward ntfy -> Telegram avec aggregation, digest, retention, et UI a
 
 ### Essentielles
 1. `NTFY_BASE_URL` (defaut `http://ntfy`)
-2. `TELEGRAM_ENABLED` (defaut `true`)
-3. `TELEGRAM_BOT_TOKEN` (requis si `TELEGRAM_ENABLED=true`)
-4. `TELEGRAM_ADMIN_CHAT_ID` (requis si `TELEGRAM_ENABLED=true`)
-5. `ADMIN_TOKEN` (requis pour l'UI admin)
-6. `ADMIN_RECENT_EVENTS` (defaut `50`)
-7. `TZ` (defaut `UTC`)
-8. `LOG_LEVEL` (defaut `INFO`)
+2. `DELIVERY_TARGETS` (defaut `telegram` si `TELEGRAM_ENABLED=true`, ex:
+   `telegram,discord,slack,whatsapp,webhook`)
+3. `TELEGRAM_ENABLED` (retrocompat, utilise si `DELIVERY_TARGETS` absent)
+4. `TELEGRAM_BOT_TOKEN` (requis si `telegram` est dans `DELIVERY_TARGETS`)
+5. `TELEGRAM_ADMIN_CHAT_ID` (requis si `telegram` est dans `DELIVERY_TARGETS`)
+6. `ADMIN_TOKEN` (requis pour l'UI admin)
+7. `ADMIN_RECENT_EVENTS` (defaut `50`)
+8. `TZ` (defaut `UTC`)
+9. `LOG_LEVEL` (defaut `INFO`)
 
 ### Topics
 1. `BOOTSTRAP_TOPICS`
@@ -79,6 +82,23 @@ Service de forward ntfy -> Telegram avec aggregation, digest, retention, et UI a
 2. `TELEGRAM_QUEUE_MAX_ATTEMPTS` (defaut `8`)
 3. `TELEGRAM_QUEUE_BASE_RETRY_SECONDS` (defaut `5`)
 4. `TELEGRAM_QUEUE_MAX_RETRY_SECONDS` (defaut `300`)
+
+### Discord
+1. `DISCORD_WEBHOOK_URL` (requis si `discord` cible active)
+
+### Slack
+1. `SLACK_WEBHOOK_URL` (requis si `slack` cible active)
+
+### Webhook generic
+1. `GENERIC_WEBHOOK_URL` (requis si `webhook` cible active)
+2. `GENERIC_WEBHOOK_AUTH_HEADER` (optionnel, ex: `Bearer ...`)
+
+### WhatsApp Cloud API
+1. `WHATSAPP_PHONE_NUMBER_ID` (requis si `whatsapp` cible active)
+2. `WHATSAPP_ACCESS_TOKEN` (requis si `whatsapp` cible active)
+3. `WHATSAPP_TO` (requis si `whatsapp` cible active)
+4. `WHATSAPP_API_BASE` (defaut `https://graph.facebook.com`)
+5. `WHATSAPP_API_VERSION` (defaut `v23.0`)
 
 ### Maintenance DB
 1. `DB_MAINTENANCE_INTERVAL_SECONDS` (defaut `3600`)

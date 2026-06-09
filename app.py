@@ -18,12 +18,18 @@ from core.config import (
     BOOTSTRAP_TOPICS,
     TG_TOKEN,
     TG_ADMIN,
-    TELEGRAM_ENABLED,
     NTFY_BASE_URL,
     TOPIC_ALLOWLIST,
     TOPIC_DENYLIST,
     LOG_LEVEL,
     TZ,
+    DELIVERY_TARGETS,
+    GENERIC_WEBHOOK_URL,
+    DISCORD_WEBHOOK_URL,
+    SLACK_WEBHOOK_URL,
+    WHATSAPP_PHONE_NUMBER_ID,
+    WHATSAPP_ACCESS_TOKEN,
+    WHATSAPP_TO,
 )
 
 from db.schema import init_db
@@ -33,7 +39,7 @@ from services.ntfy import ntfy_worker
 from services.plugins import load_plugins
 
 from tasks.aggregation import aggregation_loop
-from tasks.telegram_sender import telegram_sender_loop
+from tasks.delivery_sender import delivery_sender_loop
 from tasks.daily_summary import daily_summary_loop
 from tasks.digest import digest_loop
 from tasks.retention import retention_loop
@@ -49,10 +55,22 @@ def validate_config():
     if not NTFY_BASE_URL:
         raise RuntimeError("NTFY_BASE_URL is not set")
 
-    if TELEGRAM_ENABLED:
+    if "telegram" in DELIVERY_TARGETS:
         if not TG_TOKEN or not TG_ADMIN:
             raise RuntimeError(
                 "TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID not set"
+            )
+
+    if "webhook" in DELIVERY_TARGETS and not GENERIC_WEBHOOK_URL:
+        raise RuntimeError("GENERIC_WEBHOOK_URL not set")
+    if "discord" in DELIVERY_TARGETS and not DISCORD_WEBHOOK_URL:
+        raise RuntimeError("DISCORD_WEBHOOK_URL not set")
+    if "slack" in DELIVERY_TARGETS and not SLACK_WEBHOOK_URL:
+        raise RuntimeError("SLACK_WEBHOOK_URL not set")
+    if "whatsapp" in DELIVERY_TARGETS:
+        if not WHATSAPP_PHONE_NUMBER_ID or not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_TO:
+            raise RuntimeError(
+                "WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN / WHATSAPP_TO not set"
             )
 
 
@@ -116,10 +134,10 @@ async def main():
 
     await create_http_session()
 
-    if not TELEGRAM_ENABLED:
+    if not DELIVERY_TARGETS:
         log(
             "WARN",
-            "telegram disabled",
+            "all delivery targets disabled",
         )
 
     await load_plugins()
@@ -128,10 +146,10 @@ async def main():
 
     background_tasks = []
 
-    if TELEGRAM_ENABLED:
+    if DELIVERY_TARGETS:
         background_tasks.append(
             asyncio.create_task(
-                telegram_sender_loop()
+                delivery_sender_loop()
             )
         )
         background_tasks.append(

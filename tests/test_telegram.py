@@ -78,7 +78,7 @@ async def test_tg_call_requires_token(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_message_success(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
 
     async def ok_send(_m, attachment_url=None, priority=3):
         return None
@@ -95,7 +95,7 @@ async def test_process_message_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_message_retries_and_fails(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
     from services.telegram import TelegramAPIError
 
     monkeypatch.setattr(
@@ -110,7 +110,7 @@ async def test_process_message_retries_and_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_queue_item_skips_disabled_topic(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
 
     async def disabled(_topic):
         return False
@@ -130,7 +130,7 @@ async def test_process_queue_item_skips_disabled_topic(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_queue_item_accepts_legacy_string(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
 
     calls = []
 
@@ -188,7 +188,7 @@ async def test_tg_call_429_is_retryable(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_telegram_message_sends_attachment(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
 
     calls = []
 
@@ -213,7 +213,7 @@ async def test_send_telegram_message_sends_attachment(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_telegram_message_high_priority_not_silent(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
 
     calls = []
 
@@ -232,7 +232,7 @@ async def test_send_telegram_message_high_priority_not_silent(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_queue_item_marks_non_retryable_dead(monkeypatch):
-    from tasks import telegram_sender
+    from tasks import delivery_sender as telegram_sender
     from services.telegram import TelegramAPIError
 
     async def enabled(_topic):
