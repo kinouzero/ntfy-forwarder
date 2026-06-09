@@ -722,7 +722,9 @@ async def admin_page(request):
                     <div><span class="badge text-bg-light">${{t.count_total}}</span> total</div>
                     <div class="small text-muted">+${{t.count_24h}} /24h</div>
                     <div class="small text-muted">${{t.count_since_reset}} since reset</div>
-                    <div class="small text-muted">${{t.status_counts?.disabled ?? 0}} since disabled</div>
+                    <div class="small text-muted">
+                      ${{t.status_counts?.disabled ?? 0}} since disabled
+                    </div>
                   </div>
                 </td>
                 <td data-label="Action">
@@ -1844,7 +1846,9 @@ async def admin_errors_page(request):
                 <tr>
                   <th class="sortable" data-sort="id">ID <span class="sort-ind">↕</span></th>
                   <th class="sortable" data-sort="ts">Time <span class="sort-ind">↕</span></th>
-                  <th class="sortable" data-sort="component">Component <span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="component">
+                    Component <span class="sort-ind">↕</span>
+                  </th>
                   <th class="sortable" data-sort="topic">Topic <span class="sort-ind">↕</span></th>
                   <th class="sortable" data-sort="error">Error <span class="sort-ind">↕</span></th>
                 </tr>
@@ -2284,17 +2288,27 @@ async def admin_queue_page(request):
                 <tr>
                   <th class="sortable" data-sort="id">ID <span class="sort-ind">↕</span></th>
                   <th class="sortable" data-sort="topic">Topic <span class="sort-ind">↕</span></th>
-                  <th class="sortable" data-sort="attempts">Attempts <span class="sort-ind">↕</span></th>
-                  <th class="sortable" data-sort="last_error">Error <span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="attempts">
+                    Attempts <span class="sort-ind">↕</span>
+                  </th>
+                  <th class="sortable" data-sort="last_error">
+                    Error <span class="sort-ind">↕</span>
+                  </th>
                   <th>Message</th>
-                  <th class="sortable" data-sort="updated_at">Updated <span class="sort-ind">↕</span></th>
+                  <th class="sortable" data-sort="updated_at">
+                    Updated <span class="sort-ind">↕</span>
+                  </th>
                   <th>Action</th>
                 </tr>
               </thead>
               <tbody id="rows"></tbody>
             </table>
           </div>
-          <dialog id="payload-modal" class="rounded border-0 shadow" style="max-width:920px;width:92vw;">
+          <dialog
+            id="payload-modal"
+            class="rounded border-0 shadow"
+            style="max-width:920px;width:92vw;"
+          >
             <div class="d-flex justify-content-between align-items-center mb-2">
               <h5 class="m-0">DLQ Message</h5>
               <button id="payload-close" class="btn btn-outline-secondary btn-sm">
@@ -2444,7 +2458,9 @@ async def admin_queue_page(request):
                 <td data-label="Topic">${{e.topic || ''}}</td>
                 <td data-label="Attempts">${{e.attempts}}</td>
                 <td data-label="Error"><code>${{(e.last_error || '').slice(0, 200)}}</code></td>
-                <td data-label="Message"><code>${{escapeHtml(messagePreview(e).slice(0, 160))}}</code></td>
+                <td data-label="Message">
+                  <code>${{escapeHtml(messagePreview(e).slice(0, 160))}}</code>
+                </td>
                 <td data-label="Updated">${{fmt(e.updated_at)}}</td>
                 <td data-label="Action">
                   <button class="btn btn-outline-secondary btn-sm"
