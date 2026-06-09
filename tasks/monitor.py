@@ -4,13 +4,15 @@ import time
 from core.state import (
     workers,
     worker_last_seen,
+    shutdown_event,
 )
 
 from services.ntfy import ntfy_worker
+from core.logging import log
 
 async def worker_monitor_loop():
 
-    while True:
+    while not shutdown_event.is_set():
 
         now = int(time.time())
 
@@ -28,5 +30,6 @@ async def worker_monitor_loop():
                 workers[topic] = asyncio.create_task(
                     ntfy_worker(topic)
                 )
+                log("WARN", "monitor restarted stale worker", topic=topic)
 
         await asyncio.sleep(30)

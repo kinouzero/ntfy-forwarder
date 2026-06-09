@@ -1,18 +1,17 @@
 import asyncio
 import time
-import sqlite3
 
 from db.client import db
 
 from core.config import (
     RETENTION_DAYS,
     ERROR_RETENTION_DAYS,
-    DB_PATH,
 )
+from core.state import shutdown_event
 
 async def retention_loop():
 
-    while True:
+    while not shutdown_event.is_set():
 
         conn = await db()
 
@@ -44,13 +43,5 @@ async def retention_loop():
 
         await conn.commit()
         await conn.close()
-
-        def _vacuum():
-            conn2 = sqlite3.connect(DB_PATH)
-            conn2.execute("VACUUM")
-            conn2.execute("PRAGMA optimize")
-            conn2.close()
-
-        await asyncio.to_thread(_vacuum)
 
         await asyncio.sleep(86400)

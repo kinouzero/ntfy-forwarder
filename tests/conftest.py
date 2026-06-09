@@ -13,6 +13,8 @@ import db.schema as db_schema  # noqa: E402
 import db.messages as db_messages  # noqa: E402
 import db.errors as db_errors  # noqa: E402
 import db.topics as db_topics  # noqa: E402
+import db.telegram_queue as db_tg_queue  # noqa: E402
+import db.dead_letter as db_dead_letter  # noqa: E402
 import tasks.retention as tasks_retention  # noqa: E402
 
 
@@ -77,8 +79,9 @@ def tmp_db_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(db_messages, "db", _db)
     monkeypatch.setattr(db_errors, "db", _db)
     monkeypatch.setattr(db_topics, "db", _db)
+    monkeypatch.setattr(db_tg_queue, "db", _db)
+    monkeypatch.setattr(db_dead_letter, "db", _db)
     monkeypatch.setattr(tasks_retention, "db", _db)
-    monkeypatch.setattr(tasks_retention, "DB_PATH", str(db_path))
 
     return {
         "db_path": db_path,

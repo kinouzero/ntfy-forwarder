@@ -22,27 +22,26 @@ from core.config import (
     NTFY_BASE_URL,
     TOPIC_ALLOWLIST,
     TOPIC_DENYLIST,
-    ADMIN_WEB_URL,
-    SEND_ADMIN_LINK_ON_START,
     LOG_LEVEL,
     TZ,
 )
 
 from db.schema import init_db
-from db.topics import add_topic, get_topic
+from db.topics import add_topic
 
 from services.ntfy import ntfy_worker
 from services.plugins import load_plugins
 
 from tasks.aggregation import aggregation_loop
 from tasks.telegram_sender import telegram_sender_loop
+from tasks.daily_summary import daily_summary_loop
 from tasks.digest import digest_loop
 from tasks.retention import retention_loop
 from tasks.backup import backup_loop
 from tasks.monitor import worker_monitor_loop
+from tasks.db_maintenance import db_maintenance_loop
 
 from api.web import create_web_app
-from services.telegram import tg_call
 
 running_tasks = []
 
@@ -78,11 +77,6 @@ async def bootstrap_topics():
             log("WARN", "topic skipped", topic=topic)
             continue
 
-        existing = await get_topic(topic)
-        if existing and not bool(existing["enabled"]):
-            log("WARN", "topic disabled", topic=topic)
-            continue
-
         await add_topic(topic)
 
         task = asyncio.create_task(
@@ -106,6 +100,7 @@ async def shutdown():
     )
 
     await close_http_session()
+
 
 async def main():
 
@@ -139,26 +134,11 @@ async def main():
                 telegram_sender_loop()
             )
         )
-        if ADMIN_WEB_URL and SEND_ADMIN_LINK_ON_START:
-            payload = {
-                "chat_id": TG_ADMIN,
-                "text": "Open admin panel",
-                "reply_markup": {
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "Open Admin",
-                                "web_app": {
-                                    "url": ADMIN_WEB_URL,
-                                },
-                            }
-                        ]
-                    ]
-                },
-            }
+        background_tasks.append(
             asyncio.create_task(
-                tg_call("sendMessage", payload)
+                daily_summary_loop()
             )
+        )
 
     background_tasks.extend(
         [
@@ -176,6 +156,9 @@ async def main():
             ),
             asyncio.create_task(
                 worker_monitor_loop()
+            ),
+            asyncio.create_task(
+                db_maintenance_loop()
             ),
         ]
     )

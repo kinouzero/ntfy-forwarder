@@ -1,19 +1,10 @@
-import types
+import re
 
 from utils.markdown import escape_md
-from utils.filters import passes_filters
+import utils.filters as filters
 from utils.rate_limit import RateLimiter
 from utils.telegram import split_message
 import utils.quiet_hours as quiet_hours
-
-
-def _fake_datetime(hour):
-    class _DT:
-        @classmethod
-        def now(cls):
-            return types.SimpleNamespace(hour=hour)
-
-    return _DT
 
 
 def test_escape_md_escapes_special_chars():
@@ -40,33 +31,58 @@ def test_escape_md_escapes_special_chars():
 
 
 def test_passes_filters_blocks_debug():
-    assert passes_filters("DEBUG something") is False
-    assert passes_filters("debug something") is False
-    assert passes_filters("INFO something") is True
+    filters._include = []
+    filters._exclude = [re.compile(r"DEBUG", re.I)]
+    filters.FILTER_MIN_PRIORITY = 0
+    assert filters.passes_filters("DEBUG something") is False
+    assert filters.passes_filters("debug something") is False
+    assert filters.passes_filters("INFO something") is True
 
 
-def test_in_quiet_hours_wraps_midnight():
-    quiet_hours.QUIET_HOURS_START = 23
-    quiet_hours.QUIET_HOURS_END = 7
+def test_passes_filters_include_and_min_priority():
+    class Event:
+        def __init__(self, message, priority):
+            self.message = message
+            self.priority = priority
 
-    quiet_hours.datetime = _fake_datetime(23)
+    filters._include = [re.compile(r"alert", re.I)]
+    filters._exclude = []
+    filters.FILTER_MIN_PRIORITY = 3
+
+    assert filters.passes_filters(Event("this is alert", 4)) is True
+    assert filters.passes_filters(Event("this is info", 4)) is False
+    assert filters.passes_filters(Event("this is alert", 2)) is False
+
+
+def test_in_quiet_hours_wraps_midnight(monkeypatch):
+    monkeypatch.setattr(quiet_hours, "QUIET_HOURS_START", 23)
+    monkeypatch.setattr(quiet_hours, "QUIET_HOURS_END", 7)
+
+    monkeypatch.setattr(quiet_hours, "_now_hour", lambda: 23)
     assert quiet_hours.in_quiet_hours() is True
 
-    quiet_hours.datetime = _fake_datetime(6)
+    monkeypatch.setattr(quiet_hours, "_now_hour", lambda: 6)
     assert quiet_hours.in_quiet_hours() is True
 
-    quiet_hours.datetime = _fake_datetime(12)
+    monkeypatch.setattr(quiet_hours, "_now_hour", lambda: 12)
     assert quiet_hours.in_quiet_hours() is False
 
 
-def test_in_quiet_hours_same_day_window():
-    quiet_hours.QUIET_HOURS_START = 9
-    quiet_hours.QUIET_HOURS_END = 17
+def test_in_quiet_hours_same_day_window(monkeypatch):
+    monkeypatch.setattr(quiet_hours, "QUIET_HOURS_START", 9)
+    monkeypatch.setattr(quiet_hours, "QUIET_HOURS_END", 17)
 
-    quiet_hours.datetime = _fake_datetime(10)
+    monkeypatch.setattr(quiet_hours, "_now_hour", lambda: 10)
     assert quiet_hours.in_quiet_hours() is True
 
-    quiet_hours.datetime = _fake_datetime(8)
+    monkeypatch.setattr(quiet_hours, "_now_hour", lambda: 8)
+    assert quiet_hours.in_quiet_hours() is False
+
+
+def test_in_quiet_hours_disabled_when_same_boundaries(monkeypatch):
+    monkeypatch.setattr(quiet_hours, "QUIET_HOURS_START", 8)
+    monkeypatch.setattr(quiet_hours, "QUIET_HOURS_END", 8)
+    monkeypatch.setattr(quiet_hours, "_now_hour", lambda: 8)
     assert quiet_hours.in_quiet_hours() is False
 
 

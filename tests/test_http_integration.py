@@ -3,17 +3,33 @@ import json
 from aiohttp.test_utils import make_mocked_request
 
 from api.web import create_web_app
-from core.state import workers, telegram_queue
-from tests.conftest import drain_queue
+from core.state import workers
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint():
+async def test_health_endpoint(monkeypatch):
     workers.clear()
     workers["t1"] = object()
-    drain_queue(telegram_queue)
-    telegram_queue.put_nowait("m1")
-    telegram_queue.put_nowait("m2")
+    async def _count():
+        return 2
+    monkeypatch.setattr("api.web.count_telegram_queue", _count)
+    async def _dead():
+        return 0
+    monkeypatch.setattr("api.web.count_dead_letters", _dead)
+    monkeypatch.setattr("api.web.HEALTH_TELEGRAM_CHECK_ENABLED", False)
+    monkeypatch.setattr("api.web.TELEGRAM_ENABLED", False)
+
+    class _Conn:
+        async def execute(self, *_a, **_kw):
+            return None
+        async def commit(self):
+            return None
+        async def close(self):
+            return None
+
+    async def _db():
+        return _Conn()
+    monkeypatch.setattr("api.web.db", _db)
 
     app = await create_web_app()
     req = make_mocked_request("GET", "/health", app=app)
@@ -24,8 +40,7 @@ async def test_health_endpoint():
     assert payload["status"] == "ok"
     assert payload["workers"] == 1
     assert payload["queue"] == 2
-
-    drain_queue(telegram_queue)
+    assert "checks" in payload
 
 
 @pytest.mark.asyncio

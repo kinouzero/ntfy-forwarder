@@ -39,6 +39,20 @@ telegram_queue_size = Gauge(
     "forwarder_telegram_queue_size",
     "Current size of telegram queue",
 )
+telegram_dead_letter_size = Gauge(
+    "forwarder_telegram_dead_letter_size",
+    "Current dead letter queue size",
+)
+telegram_queue_retries_total = Counter(
+    "forwarder_telegram_queue_retries_total",
+    "Total telegram queue retries scheduled",
+    ["reason"],
+)
+telegram_dead_letter_total = Counter(
+    "forwarder_telegram_dead_letter_total",
+    "Total messages moved to dead letter queue",
+    ["reason"],
+)
 
 worker_errors_total = Counter(
     "forwarder_worker_errors_total",
@@ -79,4 +93,15 @@ event_process_seconds = Histogram(
     "forwarder_event_process_seconds",
     "Event processing duration seconds",
     ["topic"],
+)
+
+db_maintenance_seconds = Histogram(
+    "forwarder_db_maintenance_seconds",
+    "SQLite maintenance duration seconds",
+    ["operation"],
+)
+db_maintenance_runs_total = Counter(
+    "forwarder_db_maintenance_runs_total",
+    "SQLite maintenance runs",
+    ["operation"],
 )

@@ -4,7 +4,6 @@ import pytest
 
 from tasks import aggregation as agg
 from models.event import NtfyEvent
-from tests.conftest import drain_queue
 
 
 async def _one_loop_sleep():
@@ -22,8 +21,15 @@ async def _one_loop_sleep():
 @pytest.mark.asyncio
 async def test_aggregation_below_min_sends_individual(monkeypatch):
     agg.aggregation_buffer.clear()
-    drain_queue(agg.telegram_queue)
+    sent = []
 
+    async def enabled(_topic):
+        return True
+
+    monkeypatch.setattr(agg, "is_topic_enabled", enabled)
+    async def enqueue(payload):
+        sent.append(payload)
+    monkeypatch.setattr(agg, "enqueue_telegram", enqueue)
     monkeypatch.setattr(agg, "AGGREGATION_MIN_COUNT", 3)
     monkeypatch.setattr(agg, "AGGREGATION_INTERVAL", 0)
     monkeypatch.setattr(agg.asyncio, "sleep", await _one_loop_sleep())
@@ -35,15 +41,21 @@ async def test_aggregation_below_min_sends_individual(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await agg.aggregation_loop()
 
-    assert agg.telegram_queue.qsize() == 2
-    drain_queue(agg.telegram_queue)
+    assert len(sent) == 2
 
 
 @pytest.mark.asyncio
 async def test_aggregation_above_min_sends_summary(monkeypatch):
     agg.aggregation_buffer.clear()
-    drain_queue(agg.telegram_queue)
+    sent = []
 
+    async def enabled(_topic):
+        return True
+
+    monkeypatch.setattr(agg, "is_topic_enabled", enabled)
+    async def enqueue(payload):
+        sent.append(payload)
+    monkeypatch.setattr(agg, "enqueue_telegram", enqueue)
     monkeypatch.setattr(agg, "AGGREGATION_MIN_COUNT", 2)
     monkeypatch.setattr(agg, "AGGREGATION_INTERVAL", 0)
     monkeypatch.setattr(agg.asyncio, "sleep", await _one_loop_sleep())
@@ -55,5 +67,29 @@ async def test_aggregation_above_min_sends_summary(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await agg.aggregation_loop()
 
-    assert agg.telegram_queue.qsize() == 1
-    drain_queue(agg.telegram_queue)
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_aggregation_drops_disabled_topic(monkeypatch):
+    agg.aggregation_buffer.clear()
+    sent = []
+
+    async def disabled(_topic):
+        return False
+
+    monkeypatch.setattr(agg, "is_topic_enabled", disabled)
+    async def enqueue(payload):
+        sent.append(payload)
+    monkeypatch.setattr(agg, "enqueue_telegram", enqueue)
+    monkeypatch.setattr(agg, "AGGREGATION_INTERVAL", 0)
+    monkeypatch.setattr(agg.asyncio, "sleep", await _one_loop_sleep())
+
+    e1 = NtfyEvent.from_json("t1", {"message": "m1"})
+    agg.aggregation_buffer["t1"] = [e1]
+
+    with pytest.raises(asyncio.CancelledError):
+        await agg.aggregation_loop()
+
+    assert len(sent) == 0
+    assert agg.aggregation_buffer["t1"] == []

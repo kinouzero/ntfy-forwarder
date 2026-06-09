@@ -40,7 +40,12 @@ from models.event import NtfyEvent
 from services.plugins import run_plugins
 
 from db.messages import insert_messages
-from db.topics import increment_topic_count
+from db.topics import (
+    increment_topic_count,
+    is_topic_enabled,
+    increment_topic_status_count,
+)
+from db.dead_letter import move_to_dead_letter
 from db.errors import log_error
 
 from core.metrics import (
@@ -57,7 +62,6 @@ from core.metrics import (
 )
 
 async def ntfy_worker(topic):
-
     if TOPIC_ALLOWLIST and topic not in TOPIC_ALLOWLIST:
         log("WARN", "topic not in allowlist", topic=topic)
         return
@@ -83,6 +87,7 @@ async def ntfy_worker(topic):
             "received": 0,
             "filtered": 0,
             "rate_limited": 0,
+            "disabled": 0,
             "inserted": 0,
             "errors": 0,
         },
@@ -99,6 +104,37 @@ async def ntfy_worker(topic):
     async def flush_buffer():
         nonlocal buffer, last_flush
         if not buffer:
+            return
+
+        if not await is_topic_enabled(topic):
+            for raw, evt in buffer:
+                log("DEBUG", "filtered", topic=topic, reason="disabled")
+                ntfy_messages_filtered_total.labels(
+                    topic=topic,
+                    reason="disabled",
+                ).inc()
+                topic_stats[topic]["filtered"] += 1
+                topic_stats[topic]["disabled"] += 1
+                await increment_topic_status_count(topic, "filtered")
+                await increment_topic_status_count(topic, "disabled")
+                await move_to_dead_letter(
+                    payload=raw,
+                    attempts=0,
+                    last_error="topic_disabled",
+                    topic=topic,
+                )
+                recent_events[topic].append(
+                    {
+                        "ts": int(time.time()),
+                        "message": evt.message,
+                        "priority": evt.priority,
+                        "event_id": evt.event_id,
+                        "title": evt.title,
+                        "tags": evt.tags,
+                    }
+                )
+            buffer = []
+            last_flush = time.monotonic()
             return
 
         raws = [raw for raw, _evt in buffer]
@@ -212,6 +248,7 @@ async def ntfy_worker(topic):
                     worker_last_seen[topic] = int(time.time())
                     ntfy_messages_total.labels(topic=topic).inc()
                     topic_stats[topic]["received"] += 1
+                    await increment_topic_status_count(topic, "received")
                     start_time = time.monotonic()
 
                     event = NtfyEvent.from_json(
@@ -219,8 +256,36 @@ async def ntfy_worker(topic):
                         raw,
                     )
 
+                    if not await is_topic_enabled(topic):
+                        log("DEBUG", "filtered", topic=topic, reason="disabled")
+                        ntfy_messages_filtered_total.labels(
+                            topic=topic,
+                            reason="disabled",
+                        ).inc()
+                        topic_stats[topic]["filtered"] += 1
+                        topic_stats[topic]["disabled"] += 1
+                        await increment_topic_status_count(topic, "filtered")
+                        await increment_topic_status_count(topic, "disabled")
+                        await move_to_dead_letter(
+                            payload=raw,
+                            attempts=0,
+                            last_error="topic_disabled",
+                            topic=topic,
+                        )
+                        recent_events[topic].append(
+                            {
+                                "ts": int(time.time()),
+                                "message": event.message,
+                                "priority": event.priority,
+                                "event_id": event.event_id,
+                                "title": event.title,
+                                "tags": event.tags,
+                            }
+                        )
+                        continue
+
                     if not passes_filters(
-                        event.message
+                        event
                     ):
                         log("DEBUG", "filtered", topic=topic, reason="filter")
                         ntfy_messages_filtered_total.labels(
@@ -228,6 +293,7 @@ async def ntfy_worker(topic):
                             reason="filter",
                         ).inc()
                         topic_stats[topic]["filtered"] += 1
+                        await increment_topic_status_count(topic, "filtered")
                         continue
 
                     if (
@@ -240,6 +306,7 @@ async def ntfy_worker(topic):
                             reason="quiet_hours",
                         ).inc()
                         topic_stats[topic]["filtered"] += 1
+                        await increment_topic_status_count(topic, "filtered")
                         continue
 
                     if RATE_LIMIT_PER_TOPIC > 0:
@@ -260,6 +327,10 @@ async def ntfy_worker(topic):
                                 reason="rate_limit",
                             ).inc()
                             topic_stats[topic]["rate_limited"] += 1
+                            await increment_topic_status_count(
+                                topic,
+                                "rate_limited",
+                            )
                             continue
 
                     buffer.append((raw, event))

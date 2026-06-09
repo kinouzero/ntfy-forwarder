@@ -7,10 +7,11 @@ from core.config import (
     DB_PATH,
     BACKUP_DIR,
 )
+from core.state import shutdown_event
 
 async def backup_loop():
 
-    while True:
+    while not shutdown_event.is_set():
 
         ts = datetime.now(timezone.utc).strftime(
             "%Y%m%d-%H%M%S"

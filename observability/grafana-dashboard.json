@@ -1,0 +1,51 @@
+{
+  "title": "ntfy-forwarder",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Telegram Queue Depth",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "forwarder_telegram_queue_size", "legendFormat": "queue"},
+        {"expr": "forwarder_telegram_dead_letter_size", "legendFormat": "dead_letter"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Telegram Sends/Failures",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "rate(forwarder_telegram_messages_sent_total[5m])", "legendFormat": "sent/s"},
+        {"expr": "rate(forwarder_telegram_messages_failed_total[5m])", "legendFormat": "failed/s"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue Retries by Reason",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "sum by (reason) (rate(forwarder_telegram_queue_retries_total[5m]))", "legendFormat": "{{reason}}"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dead Letters by Reason",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "sum by (reason) (rate(forwarder_telegram_dead_letter_total[5m]))", "legendFormat": "{{reason}}"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "DB Maintenance Duration",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le, operation) (rate(forwarder_db_maintenance_seconds_bucket[5m])))", "legendFormat": "p95 {{operation}}"}
+      ]
+    }
+  ]
+}

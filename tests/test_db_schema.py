@@ -19,3 +19,5 @@ async def test_init_db_creates_tables(tmp_db_paths):
     assert "messages" in names
     assert "errors" in names
     assert "telegram_queue" in names
+    assert "telegram_dead_letter" in names
+    assert "topic_status_counts" in names

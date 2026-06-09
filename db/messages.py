@@ -60,3 +60,22 @@ async def insert_messages(topic, events):
 
     finally:
         await conn.close()
+
+
+async def count_messages_by_topic_since(since_ts):
+    conn = await db()
+    cur = await conn.execute(
+        '''
+        SELECT topic, COUNT(*) AS c
+        FROM messages
+        WHERE created_at >= ?
+        GROUP BY topic
+        ''',
+        (int(since_ts),),
+    )
+    rows = await cur.fetchall()
+    await conn.close()
+    return {
+        row["topic"]: int(row["c"])
+        for row in rows
+    }

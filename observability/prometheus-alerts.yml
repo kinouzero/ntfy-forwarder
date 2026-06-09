@@ -1,0 +1,38 @@
+groups:
+  - name: ntfy-forwarder
+    rules:
+      - alert: ForwarderTelegramQueueHigh
+        expr: forwarder_telegram_queue_size > 200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forwarder queue depth high"
+          description: "telegram_queue_size > 200 for 10m"
+
+      - alert: ForwarderDeadLetterGrowing
+        expr: increase(forwarder_telegram_dead_letter_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "New dead letters detected"
+          description: "Messages are being pushed to dead letter queue"
+
+      - alert: ForwarderNoMessagesInserted
+        expr: sum(increase(forwarder_ntfy_messages_inserted_total[30m])) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No inserted messages in 30m"
+          description: "Forwarder receives no insertions; check workers/ntfy connectivity"
+
+      - alert: ForwarderWorkerErrorsSpike
+        expr: increase(forwarder_worker_errors_total[10m]) > 20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker errors spike"
+          description: "forwarder_worker_errors_total increased by >20 in 10m"

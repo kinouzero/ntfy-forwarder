@@ -52,11 +52,47 @@ DB_BATCH_FLUSH_SECONDS = int(os.getenv("DB_BATCH_FLUSH_SECONDS", "1"))
 TELEGRAM_MAX_MESSAGE_LENGTH = int(
     os.getenv("TELEGRAM_MAX_MESSAGE_LENGTH", "4096")
 )
+TELEGRAM_QUEUE_MAX_ATTEMPTS = int(
+    os.getenv("TELEGRAM_QUEUE_MAX_ATTEMPTS", "8")
+)
+TELEGRAM_QUEUE_BASE_RETRY_SECONDS = int(
+    os.getenv("TELEGRAM_QUEUE_BASE_RETRY_SECONDS", "5")
+)
+TELEGRAM_QUEUE_MAX_RETRY_SECONDS = int(
+    os.getenv("TELEGRAM_QUEUE_MAX_RETRY_SECONDS", "300")
+)
+DB_MAINTENANCE_INTERVAL_SECONDS = int(
+    os.getenv("DB_MAINTENANCE_INTERVAL_SECONDS", "3600")
+)
+DAILY_SUMMARY_ENABLED = os.getenv("DAILY_SUMMARY_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+DAILY_SUMMARY_HOUR = int(os.getenv("DAILY_SUMMARY_HOUR", "8"))
+DAILY_SUMMARY_MINUTE = int(os.getenv("DAILY_SUMMARY_MINUTE", "0"))
+HEALTH_TELEGRAM_CHECK_ENABLED = os.getenv(
+    "HEALTH_TELEGRAM_CHECK_ENABLED",
+    "true",
+).lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
-ADMIN_WEB_URL = os.getenv("ADMIN_WEB_URL", "")
-SEND_ADMIN_LINK_ON_START = os.getenv(
-    "SEND_ADMIN_LINK_ON_START",
-    "false",
-).lower() in ("1", "true", "yes", "on")
 ADMIN_RECENT_EVENTS = int(os.getenv("ADMIN_RECENT_EVENTS", "50"))
+
+FILTER_INCLUDE_REGEX = [
+    p.strip()
+    for p in os.getenv("FILTER_INCLUDE_REGEX", "").split(";;")
+    if p.strip()
+]
+FILTER_EXCLUDE_REGEX = [
+    p.strip()
+    for p in os.getenv("FILTER_EXCLUDE_REGEX", "DEBUG").split(";;")
+    if p.strip()
+]
+FILTER_MIN_PRIORITY = int(os.getenv("FILTER_MIN_PRIORITY", "0"))
