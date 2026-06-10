@@ -1,13 +1,13 @@
-# Zero Notification Forwarder
+# Ntfy Forwarder
 
-Forwarder `ntfy` vers plusieurs targets (Telegram, Discord, Slack, WhatsApp, webhook), avec:
-- persistance SQLite
-- filtres / quiet hours / rate limiting
+`ntfy` forwarder to multiple targets (Telegram, Discord, Slack, WhatsApp, webhook), with:
+- web admin interface
+- SQLite persistence
+- filters / quiet hours / rate limiting
 - queue + retry + DLQ
-- interface admin web
-- métriques Prometheus
+- Prometheus metrics
 
-## Démarrage rapide
+## Quick Start
 
 ```yaml
 services:
@@ -22,7 +22,7 @@ services:
       TZ: "Europe/Paris"
       LOG_LEVEL: "INFO"
 
-      # Targets auto-détectées par présence des variables
+      # Targets are auto-detected based on env vars
       TELEGRAM_BOT_TOKEN: "..."
       TELEGRAM_ADMIN_CHAT_ID: "123456789"
       DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/..."
@@ -30,81 +30,81 @@ services:
       GENERIC_WEBHOOK_URL: "https://example.com/webhook"
       # GENERIC_WEBHOOK_AUTH_HEADER: "Bearer ..."
 
-      # WhatsApp Cloud API (optionnel)
+      # WhatsApp Cloud API (optional)
       # WHATSAPP_PHONE_NUMBER_ID: "..."
       # WHATSAPP_ACCESS_TOKEN: "..."
       # WHATSAPP_TO: "..."
 ```
 
-## Activation des targets
+## Target Activation
 
-Les targets actives sont auto-détectées selon les variables présentes:
+Active targets are auto-detected from configured env vars:
 - `telegram`: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID`
 - `discord`: `DISCORD_WEBHOOK_URL`
 - `slack`: `SLACK_WEBHOOK_URL`
 - `webhook`: `GENERIC_WEBHOOK_URL`
 - `whatsapp`: `WHATSAPP_PHONE_NUMBER_ID` + `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_TO`
 
-## Variables d’environnement
+## Environment Variables
 
-### Essentielles
-- `NTFY_BASE_URL` (défaut: `http://ntfy`)
+### Required
+- `NTFY_BASE_URL` (default: `http://ntfy`)
 - `NTFY_TOKEN`
-- `ADMIN_TOKEN` (requis pour l’UI admin)
-- `ADMIN_RECENT_EVENTS` (défaut: `50`)
-- `DB_PATH` (défaut: `/app/data/ntfy.db`)
-- `TZ` (défaut: `UTC`)
-- `LOG_LEVEL` (défaut: `INFO`)
+- `ADMIN_TOKEN` (required for admin UI)
+- `ADMIN_RECENT_EVENTS` (default: `50`)
+- `DB_PATH` (default: `/app/data/ntfy.db`)
+- `TZ` (default: `UTC`)
+- `LOG_LEVEL` (default: `INFO`)
 
 ### Targets
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ADMIN_CHAT_ID`
-- `TELEGRAM_MAX_MESSAGE_LENGTH` (défaut: `4096`)
+- `TELEGRAM_MAX_MESSAGE_LENGTH` (default: `4096`)
 - `DISCORD_WEBHOOK_URL`
 - `SLACK_WEBHOOK_URL`
 - `GENERIC_WEBHOOK_URL`
-- `GENERIC_WEBHOOK_AUTH_HEADER` (optionnel)
+- `GENERIC_WEBHOOK_AUTH_HEADER` (optional)
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_ACCESS_TOKEN`
 - `WHATSAPP_TO`
-- `WHATSAPP_API_BASE` (défaut: `https://graph.facebook.com`)
-- `WHATSAPP_API_VERSION` (défaut: `v23.0`)
+- `WHATSAPP_API_BASE` (default: `https://graph.facebook.com`)
+- `WHATSAPP_API_VERSION` (default: `v23.0`)
 
 ### Retry / queue
-- `DELIVERY_QUEUE_MAX_ATTEMPTS` (défaut: `8`)
-- `DELIVERY_QUEUE_BASE_RETRY_SECONDS` (défaut: `5`)
-- `DELIVERY_QUEUE_MAX_RETRY_SECONDS` (défaut: `300`)
+- `DELIVERY_QUEUE_MAX_ATTEMPTS` (default: `8`)
+- `DELIVERY_QUEUE_BASE_RETRY_SECONDS` (default: `5`)
+- `DELIVERY_QUEUE_MAX_RETRY_SECONDS` (default: `300`)
 
 ### Topics
 - `BOOTSTRAP_TOPICS`
 
-### Comportement
-- `QUIET_HOURS_START` (défaut: `23`)
-- `QUIET_HOURS_END` (défaut: `7`)
+### Behavior
+- `QUIET_HOURS_START` (default: `23`)
+- `QUIET_HOURS_END` (default: `7`)
 
 ### Performance / maintenance
-- `DB_BATCH_SIZE` (défaut: `1`)
-- `DB_BATCH_FLUSH_SECONDS` (défaut: `1`)
-- `RETENTION_DAYS` (défaut: `30`)
-- `ERROR_RETENTION_DAYS` (défaut: `7`)
-- `DB_MAINTENANCE_INTERVAL_SECONDS` (défaut: `3600`)
+- `DB_BATCH_SIZE` (default: `1`)
+- `DB_BATCH_FLUSH_SECONDS` (default: `1`)
+- `RETENTION_DAYS` (default: `30`)
+- `ERROR_RETENTION_DAYS` (default: `7`)
+- `DB_MAINTENANCE_INTERVAL_SECONDS` (default: `3600`)
 
-### Agrégation / digest / résumé
-- `AGGREGATION_INTERVAL` (défaut: `30`)
-- `AGGREGATION_MIN_COUNT` (défaut: `10`)
-- `MAX_AGGREGATION_BUFFER` (défaut: `1000`)
-- `MAX_DIGEST_BUFFER` (défaut: `1000`)
-- `DAILY_SUMMARY_ENABLED` (défaut: `true`)
-- `DAILY_SUMMARY_HOUR` (défaut: `8`)
-- `DAILY_SUMMARY_MINUTE` (défaut: `0`)
+### Aggregation / digest / summary
+- `AGGREGATION_INTERVAL` (default: `30`)
+- `AGGREGATION_MIN_COUNT` (default: `10`)
+- `MAX_AGGREGATION_BUFFER` (default: `1000`)
+- `MAX_DIGEST_BUFFER` (default: `1000`)
+- `DAILY_SUMMARY_ENABLED` (default: `true`)
+- `DAILY_SUMMARY_HOUR` (default: `8`)
+- `DAILY_SUMMARY_MINUTE` (default: `0`)
 
 ## API
 
-### Système
+### System
 - `GET /health`
 - `GET /metrics`
 
-### Admin pages
+### Admin Pages
 - `GET /admin?token=...`
 - `GET /admin/stats?token=...`
 - `GET /admin/errors?token=...`
@@ -123,7 +123,7 @@ Les targets actives sont auto-détectées selon les variables présentes:
 - `GET /api/topics/export?token=...`
 - `POST /api/topics/import?token=...`
 
-### Stats / erreurs / DLQ API
+### Stats / Errors / DLQ API
 - `GET /api/stats?token=...`
 - `GET /api/errors?token=...&q=...&offset=0&limit=100&format=csv`
 - `POST /api/errors/clear?token=...`
@@ -133,12 +133,12 @@ Les targets actives sont auto-détectées selon les variables présentes:
 - `POST /api/queue/dead_letters/requeue_batch?token=...`
 - `POST /api/queue/dead_letters/clear?token=...`
 
-## Observabilité
+## Observability
 
 - Dashboard: `observability/grafana-dashboard.json`
 - Alerts: `observability/prometheus-alerts.yml`
 
-## Développement
+## Development
 
 ```bash
 pytest -q
