@@ -5,9 +5,9 @@ from core.state import telegram_queue, shutdown_event
 from core.config import (
     ACTIVE_TARGETS,
     TELEGRAM_MAX_MESSAGE_LENGTH,
-    TELEGRAM_QUEUE_MAX_ATTEMPTS,
-    TELEGRAM_QUEUE_BASE_RETRY_SECONDS,
-    TELEGRAM_QUEUE_MAX_RETRY_SECONDS,
+    DELIVERY_QUEUE_MAX_ATTEMPTS,
+    DELIVERY_QUEUE_BASE_RETRY_SECONDS,
+    DELIVERY_QUEUE_MAX_RETRY_SECONDS,
 )
 from core.logging import log
 from core.metrics import (
@@ -126,9 +126,9 @@ def _unpack_queue_item(item):
 def _compute_retry_delay_seconds(attempts, exc):
     retry_after = getattr(exc, "retry_after", None)
     if retry_after:
-        return max(1, min(int(retry_after), TELEGRAM_QUEUE_MAX_RETRY_SECONDS))
-    delay = TELEGRAM_QUEUE_BASE_RETRY_SECONDS * (2 ** max(0, int(attempts)))
-    return max(1, min(int(delay), TELEGRAM_QUEUE_MAX_RETRY_SECONDS))
+        return max(1, min(int(retry_after), DELIVERY_QUEUE_MAX_RETRY_SECONDS))
+    delay = DELIVERY_QUEUE_BASE_RETRY_SECONDS * (2 ** max(0, int(attempts)))
+    return max(1, min(int(delay), DELIVERY_QUEUE_MAX_RETRY_SECONDS))
 
 
 def _is_retryable(exc):
@@ -227,11 +227,11 @@ async def delivery_sender_loop():
                 attempts = int(queue_attempts) + 1
                 if status in {"sent", "drop"}:
                     await ack_telegram_item(item_id)
-                elif status == "retry" and attempts < TELEGRAM_QUEUE_MAX_ATTEMPTS:
+                elif status == "retry" and attempts < DELIVERY_QUEUE_MAX_ATTEMPTS:
                     telegram_queue_retries_total.labels(reason=reason or "retryable").inc()
                     await retry_telegram_item(
                         item_id,
-                        delay or TELEGRAM_QUEUE_BASE_RETRY_SECONDS,
+                        delay or DELIVERY_QUEUE_BASE_RETRY_SECONDS,
                     )
                 else:
                     await move_to_dead_letter(

@@ -17,8 +17,6 @@ from core.http import (
 from core.config import (
     BOOTSTRAP_TOPICS,
     NTFY_BASE_URL,
-    TOPIC_ALLOWLIST,
-    TOPIC_DENYLIST,
     LOG_LEVEL,
     TZ,
     ACTIVE_TARGETS,
@@ -48,13 +46,6 @@ def validate_config():
         raise RuntimeError("NTFY_BASE_URL is not set")
 
 
-def topic_allowed(topic):
-    if TOPIC_ALLOWLIST and topic not in TOPIC_ALLOWLIST:
-        return False
-    if TOPIC_DENYLIST and topic in TOPIC_DENYLIST:
-        return False
-    return True
-
 async def bootstrap_topics():
 
     topics = [
@@ -64,10 +55,6 @@ async def bootstrap_topics():
     ]
 
     for topic in topics:
-
-        if not topic_allowed(topic):
-            log("WARN", "topic skipped", topic=topic)
-            continue
 
         await add_topic(topic)
 

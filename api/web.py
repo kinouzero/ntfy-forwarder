@@ -22,7 +22,6 @@ from core.state import (
 from core.metrics import telegram_queue_size
 from core.metrics import telegram_dead_letter_size
 from core.config import ADMIN_TOKEN
-from core.config import TOPIC_ALLOWLIST, TOPIC_DENYLIST
 from core.config import ADMIN_RECENT_EVENTS
 from core.config import ACTIVE_TARGETS
 from core.config import GENERIC_WEBHOOK_URL
@@ -138,13 +137,6 @@ def _start_worker(name):
     log("INFO", "topic worker started from admin", topic=name)
     return True
 
-
-def _topic_allowed(name):
-    if TOPIC_ALLOWLIST and name not in TOPIC_ALLOWLIST:
-        return False
-    if TOPIC_DENYLIST and name in TOPIC_DENYLIST:
-        return False
-    return True
 
 async def health(request):
     queue_count = await count_telegram_queue()
@@ -1225,8 +1217,6 @@ async def topic_toggle(request):
     _require_admin(request)
     name = request.match_info["name"]
     log("INFO", "admin topic_toggle", topic=name)
-    if not _topic_allowed(name):
-        raise web.HTTPForbidden()
     rows = await list_topics()
     known = {r["name"]: r for r in rows}
     if name not in known:
@@ -1255,10 +1245,6 @@ async def pause_all(request):
     rows = await list_topics()
     for r in rows:
         name = r["name"]
-        if TOPIC_ALLOWLIST and name not in TOPIC_ALLOWLIST:
-            continue
-        if TOPIC_DENYLIST and name in TOPIC_DENYLIST:
-            continue
         await set_topic_enabled(name, False)
         _start_worker(name)
     return web.json_response({"paused": True})
@@ -1269,10 +1255,6 @@ async def resume_all(request):
     rows = await list_topics()
     for r in rows:
         name = r["name"]
-        if TOPIC_ALLOWLIST and name not in TOPIC_ALLOWLIST:
-            continue
-        if TOPIC_DENYLIST and name in TOPIC_DENYLIST:
-            continue
         await add_topic(name)
         await set_topic_enabled(name, True)
         _start_worker(name)
@@ -1365,9 +1347,6 @@ async def topics_import(request):
     imported = 0
     skipped = []
     for name, enabled in items:
-        if not _topic_allowed(name):
-            skipped.append({"name": name, "reason": "blocked_by_allow_deny"})
-            continue
         await add_topic(name)
         await set_topic_enabled(name, enabled)
         _start_worker(name)

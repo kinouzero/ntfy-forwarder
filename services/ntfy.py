@@ -11,7 +11,6 @@ from core.state import (
     shutdown_event,
     worker_last_seen,
     digest_buffer,
-    rate_limiters,
     recent_events,
     topic_stats,
     topic_rates,
@@ -20,20 +19,14 @@ from core.state import (
 from core.config import (
     NTFY_BASE_URL,
     NTFY_TOKEN,
-    RATE_LIMIT_PER_TOPIC,
-    RATE_LIMIT_WINDOW_SECONDS,
     MAX_AGGREGATION_BUFFER,
     MAX_DIGEST_BUFFER,
     DB_BATCH_SIZE,
     DB_BATCH_FLUSH_SECONDS,
-    TOPIC_ALLOWLIST,
-    TOPIC_DENYLIST,
     ADMIN_RECENT_EVENTS,
 )
 
-from utils.filters import passes_filters
 from utils.quiet_hours import in_quiet_hours
-from utils.rate_limit import RateLimiter
 
 from models.event import NtfyEvent
 
@@ -54,7 +47,6 @@ from core.metrics import (
     ntfy_messages_inserted_total,
     ntfy_messages_duplicate_total,
     worker_errors_total,
-    rate_limited_total,
     aggregation_dropped_total,
     digest_dropped_total,
     db_insert_seconds,
@@ -62,13 +54,6 @@ from core.metrics import (
 )
 
 async def ntfy_worker(topic):
-    if TOPIC_ALLOWLIST and topic not in TOPIC_ALLOWLIST:
-        log("WARN", "topic not in allowlist", topic=topic)
-        return
-    if TOPIC_DENYLIST and topic in TOPIC_DENYLIST:
-        log("WARN", "topic in denylist", topic=topic)
-        return
-
     headers = {}
 
     if NTFY_TOKEN:
@@ -284,18 +269,6 @@ async def ntfy_worker(topic):
                         )
                         continue
 
-                    if not passes_filters(
-                        event
-                    ):
-                        log("DEBUG", "filtered", topic=topic, reason="filter")
-                        ntfy_messages_filtered_total.labels(
-                            topic=topic,
-                            reason="filter",
-                        ).inc()
-                        topic_stats[topic]["filtered"] += 1
-                        await increment_topic_status_count(topic, "filtered")
-                        continue
-
                     if (
                         in_quiet_hours()
                         and event.priority < 4
@@ -308,30 +281,6 @@ async def ntfy_worker(topic):
                         topic_stats[topic]["filtered"] += 1
                         await increment_topic_status_count(topic, "filtered")
                         continue
-
-                    if RATE_LIMIT_PER_TOPIC > 0:
-                        limiter = rate_limiters.setdefault(
-                            topic,
-                            RateLimiter(
-                                RATE_LIMIT_PER_TOPIC,
-                                RATE_LIMIT_WINDOW_SECONDS,
-                            ),
-                        )
-                        if not limiter.allow():
-                            log("DEBUG", "rate_limited", topic=topic)
-                            rate_limited_total.labels(
-                                topic=topic
-                            ).inc()
-                            ntfy_messages_filtered_total.labels(
-                                topic=topic,
-                                reason="rate_limit",
-                            ).inc()
-                            topic_stats[topic]["rate_limited"] += 1
-                            await increment_topic_status_count(
-                                topic,
-                                "rate_limited",
-                            )
-                            continue
 
                     buffer.append((raw, event))
 
