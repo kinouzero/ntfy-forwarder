@@ -370,3 +370,123 @@ async def test_dead_letter_clear_filtered(tmp_db_paths, monkeypatch):
     resp = await match.handler(req)
     payload = json.loads(resp.body.decode())
     assert payload["dead_letters"] == 1
+
+
+@pytest.mark.asyncio
+async def test_oidc_admin_redirects_html_when_not_logged(tmp_db_paths, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(api_web, "ADMIN_TOKEN", "")
+    monkeypatch.setattr(api_web, "OIDC_ENABLED", True)
+    monkeypatch.setattr(api_web, "OIDC_ISSUER_URL", "https://issuer.example")
+    monkeypatch.setattr(api_web, "OIDC_CLIENT_ID", "client")
+    monkeypatch.setattr(api_web, "OIDC_CLIENT_SECRET", "secret")
+    monkeypatch.setattr(api_web, "OIDC_REDIRECT_URI", "https://app/auth/callback")
+    monkeypatch.setattr(api_web, "OIDC_SESSION_SECRET", "session-secret")
+
+    app = await api_web.create_web_app()
+    req = make_mocked_request("GET", "/admin", app=app)
+    match = await app.router.resolve(req)
+
+    with pytest.raises(api_web.web.HTTPFound) as exc:
+        await match.handler(req)
+    assert "/auth/login?next=%2Fadmin" in str(exc.value.location)
+
+
+@pytest.mark.asyncio
+async def test_oidc_admin_rejects_api_when_not_logged(tmp_db_paths, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(api_web, "ADMIN_TOKEN", "")
+    monkeypatch.setattr(api_web, "OIDC_ENABLED", True)
+    monkeypatch.setattr(api_web, "OIDC_ISSUER_URL", "https://issuer.example")
+    monkeypatch.setattr(api_web, "OIDC_CLIENT_ID", "client")
+    monkeypatch.setattr(api_web, "OIDC_CLIENT_SECRET", "secret")
+    monkeypatch.setattr(api_web, "OIDC_REDIRECT_URI", "https://app/auth/callback")
+    monkeypatch.setattr(api_web, "OIDC_SESSION_SECRET", "session-secret")
+
+    app = await api_web.create_web_app()
+    req = make_mocked_request("GET", "/api/topics", app=app)
+    match = await app.router.resolve(req)
+
+    with pytest.raises(api_web.web.HTTPUnauthorized):
+        await match.handler(req)
+
+
+@pytest.mark.asyncio
+async def test_token_and_oidc_can_coexist(tmp_db_paths, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(api_web, "ADMIN_TOKEN", "tkn")
+    monkeypatch.setattr(api_web, "OIDC_ENABLED", True)
+    monkeypatch.setattr(api_web, "OIDC_ISSUER_URL", "https://issuer.example")
+    monkeypatch.setattr(api_web, "OIDC_CLIENT_ID", "client")
+    monkeypatch.setattr(api_web, "OIDC_CLIENT_SECRET", "secret")
+    monkeypatch.setattr(api_web, "OIDC_REDIRECT_URI", "https://app/auth/callback")
+    monkeypatch.setattr(api_web, "OIDC_SESSION_SECRET", "session-secret")
+
+    app = await api_web.create_web_app()
+
+    req = make_mocked_request("GET", "/api/topics?token=tkn", app=app)
+    match = await app.router.resolve(req)
+    resp = await match.handler(req)
+    payload = json.loads(resp.body.decode())
+    assert "items" in payload
+
+    req = make_mocked_request("GET", "/admin", app=app)
+    match = await app.router.resolve(req)
+    with pytest.raises(api_web.web.HTTPFound) as exc:
+        await match.handler(req)
+    assert "/auth/login?next=%2Fadmin" in str(exc.value.location)
+
+
+@pytest.mark.asyncio
+async def test_disable_query_token_requires_header_or_cookie(tmp_db_paths, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(api_web, "ADMIN_TOKEN", "tkn")
+    monkeypatch.setattr(api_web, "ADMIN_ALLOW_QUERY_TOKEN", False)
+    monkeypatch.setattr(api_web, "OIDC_ENABLED", False)
+
+    app = await api_web.create_web_app()
+
+    req = make_mocked_request("GET", "/api/topics?token=tkn", app=app)
+    match = await app.router.resolve(req)
+    with pytest.raises(api_web.web.HTTPUnauthorized):
+        await match.handler(req)
+
+    req = make_mocked_request(
+        "GET",
+        "/api/topics",
+        app=app,
+        headers={"X-Admin-Token": "tkn"},
+    )
+    match = await app.router.resolve(req)
+    resp = await match.handler(req)
+    payload = json.loads(resp.body.decode())
+    assert "items" in payload
+
+
+@pytest.mark.asyncio
+async def test_security_headers_middleware_applies(tmp_db_paths):
+    await init_db()
+    app = await api_web.create_web_app()
+
+    req = make_mocked_request("GET", "/health", app=app)
+    match = await app.router.resolve(req)
+    resp = await api_web.security_headers_middleware(req, match.handler)
+
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    assert "default-src 'self'" in resp.headers["Content-Security-Policy"]
+
+
+def test_sanitize_next_path_blocks_open_redirect():
+    assert api_web._sanitize_next_path("/admin/stats") == "/admin/stats"
+    assert api_web._sanitize_next_path("https://evil.example") == "/admin"
+    assert api_web._sanitize_next_path("//evil.example/path") == "/admin"
+
+
+def test_oidc_user_allowed_verified_email(monkeypatch):
+    monkeypatch.setattr(api_web, "OIDC_REQUIRE_VERIFIED_EMAIL", True)
+    monkeypatch.setattr(api_web, "OIDC_ALLOWED_EMAILS", tuple())
+    monkeypatch.setattr(api_web, "OIDC_ALLOWED_DOMAINS", tuple())
+    assert api_web._oidc_user_allowed({"email": "a@b.c", "email_verified": True})
+    assert not api_web._oidc_user_allowed({"email": "a@b.c", "email_verified": False})

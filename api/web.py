@@ -1,9 +1,15 @@
 import asyncio
+import base64
 import csv
+import hashlib
+import hmac
 import io
 import json
+import secrets
 import time
+from urllib.parse import urlencode
 
+import jwt
 from aiohttp import web
 from prometheus_client import (
     generate_latest,
@@ -23,7 +29,22 @@ from core.metrics import telegram_queue_size
 from core.metrics import telegram_dead_letter_size
 from core.config import ADMIN_TOKEN
 from core.config import ADMIN_RECENT_EVENTS
+from core.config import ADMIN_ALLOW_QUERY_TOKEN
 from core.config import ACTIVE_TARGETS
+from core.config import OIDC_ENABLED
+from core.config import OIDC_ISSUER_URL
+from core.config import OIDC_CLIENT_ID
+from core.config import OIDC_CLIENT_SECRET
+from core.config import OIDC_REDIRECT_URI
+from core.config import OIDC_SCOPES
+from core.config import OIDC_SESSION_SECRET
+from core.config import OIDC_SESSION_TTL_SECONDS
+from core.config import OIDC_STATE_TTL_SECONDS
+from core.config import OIDC_CLOCK_SKEW_SECONDS
+from core.config import OIDC_ALLOWED_EMAILS
+from core.config import OIDC_ALLOWED_DOMAINS
+from core.config import OIDC_VERIFY_TLS
+from core.config import OIDC_REQUIRE_VERIFIED_EMAIL
 from core.config import GENERIC_WEBHOOK_URL
 from core.config import GENERIC_WEBHOOK_AUTH_HEADER
 from core.config import DISCORD_WEBHOOK_URL
@@ -58,24 +79,187 @@ from services.telegram import tg_call
 from services.ntfy import ntfy_worker
 
 _HEALTH_TARGET_CACHE = {}
+_OIDC_DISCOVERY_CACHE = None
+_OIDC_JWKS_CACHE = None
+_AUTH_RATE_LIMIT = {}
+OIDC_STATE_COOKIE = "oidc_state"
+OIDC_SESSION_COOKIE = "admin_session"
+
+
+def _oidc_ready():
+    return bool(
+        OIDC_ENABLED
+        and OIDC_ISSUER_URL
+        and OIDC_CLIENT_ID
+        and OIDC_CLIENT_SECRET
+        and OIDC_REDIRECT_URI
+        and OIDC_SESSION_SECRET
+    )
 
 def _get_admin_token(request):
-    return (
-        request.headers.get("X-Admin-Token")
-        or request.query.get("token", "")
-        or request.cookies.get("admin_token", "")
+    header_token = request.headers.get("X-Admin-Token", "")
+    if header_token:
+        return header_token
+    cookie_token = request.cookies.get("admin_token", "")
+    if cookie_token:
+        return cookie_token
+    if ADMIN_ALLOW_QUERY_TOKEN:
+        return request.query.get("token", "")
+    return ""
+
+
+def _token_matches(expected, provided):
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(str(expected), str(provided))
+
+
+def _request_is_secure(request):
+    if request.scheme == "https":
+        return True
+    forwarded = request.headers.get("X-Forwarded-Proto", "")
+    return forwarded.lower() == "https"
+
+
+def _cookie_kwargs(request, max_age):
+    return {
+        "httponly": True,
+        "secure": _request_is_secure(request),
+        "samesite": "Lax",
+        "path": "/",
+        "max_age": int(max_age),
+    }
+
+
+def _client_ip(request):
+    xff = request.headers.get("X-Forwarded-For", "").strip()
+    if xff:
+        return xff.split(",", 1)[0].strip()
+    return (request.remote or "").strip() or "unknown"
+
+
+def _enforce_auth_rate_limit(request, action, limit=30, window_seconds=60):
+    now = time.time()
+    key = f"{action}:{_client_ip(request)}"
+    bucket = _AUTH_RATE_LIMIT.get(key, [])
+    bucket = [v for v in bucket if (now - v) <= window_seconds]
+    if len(bucket) >= limit:
+        raise web.HTTPTooManyRequests(text="too many auth requests")
+    bucket.append(now)
+    _AUTH_RATE_LIMIT[key] = bucket
+
+
+def _b64_encode(raw):
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _b64_decode(text):
+    pad = "=" * ((4 - len(text) % 4) % 4)
+    return base64.urlsafe_b64decode((text + pad).encode())
+
+
+def _sign_payload(data):
+    raw = json.dumps(data, separators=(",", ":"), sort_keys=True).encode()
+    sig = hmac.new(
+        OIDC_SESSION_SECRET.encode(),
+        raw,
+        hashlib.sha256,
+    ).digest()
+    return f"{_b64_encode(raw)}.{_b64_encode(sig)}"
+
+
+def _unsign_payload(value):
+    if "." not in value:
+        return None
+    encoded, encoded_sig = value.split(".", 1)
+    try:
+        raw = _b64_decode(encoded)
+        sig = _b64_decode(encoded_sig)
+    except Exception:
+        return None
+    expected = hmac.new(
+        OIDC_SESSION_SECRET.encode(),
+        raw,
+        hashlib.sha256,
+    ).digest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        return json.loads(raw.decode())
+    except Exception:
+        return None
+
+
+def _make_signed_cookie_value(data, ttl_seconds):
+    payload = dict(data)
+    payload["exp"] = int(time.time()) + int(ttl_seconds)
+    return _sign_payload(payload)
+
+
+def _read_signed_cookie_value(raw):
+    if not raw or not OIDC_SESSION_SECRET:
+        return None
+    payload = _unsign_payload(raw)
+    if not isinstance(payload, dict):
+        return None
+    if int(payload.get("exp", 0)) <= int(time.time()):
+        return None
+    return payload
+
+
+def _is_admin_html_request(request):
+    return request.path.startswith("/admin")
+
+
+def _build_login_redirect_target(request):
+    next_path = request.rel_url.path_qs
+    return "/auth/login?" + urlencode({"next": next_path})
+
+
+def _pkce_challenge(verifier):
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return _b64_encode(digest)
+
+
+def _sanitize_next_path(next_path):
+    value = str(next_path or "/admin").strip()
+    if not value.startswith("/"):
+        return "/admin"
+    if value.startswith("//"):
+        return "/admin"
+    return value
+
+
+def _is_oidc_session_valid(request):
+    if not _oidc_ready():
+        return False
+    session = _read_signed_cookie_value(
+        request.cookies.get(OIDC_SESSION_COOKIE, "")
     )
+    return bool(session and session.get("sub"))
+
+
+def _require_oidc_admin(request):
+    if not _oidc_ready():
+        raise web.HTTPServiceUnavailable(text="admin disabled")
+    if _is_oidc_session_valid(request):
+        return ""
+    if _is_admin_html_request(request):
+        raise web.HTTPFound(_build_login_redirect_target(request))
+    raise web.HTTPUnauthorized(text="oidc login required")
 
 
 def _require_admin(request):
-    if not ADMIN_TOKEN:
-        raise web.HTTPServiceUnavailable(
-            text="admin disabled",
-        )
     token = _get_admin_token(request)
-    if token != ADMIN_TOKEN:
-        raise web.HTTPUnauthorized()
-    return token
+    if ADMIN_TOKEN and _token_matches(ADMIN_TOKEN, token):
+        return token
+    if _is_oidc_session_valid(request):
+        return ""
+    if not ADMIN_TOKEN and not _oidc_ready():
+        raise web.HTTPServiceUnavailable(text="admin disabled")
+    if _is_admin_html_request(request) and _oidc_ready():
+        raise web.HTTPFound(_build_login_redirect_target(request))
+    raise web.HTTPUnauthorized()
 
 
 def _admin_html_response(request, token, html):
@@ -86,9 +270,312 @@ def _admin_html_response(request, token, html):
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
-    if request.cookies.get("admin_token") != token:
-        resp.set_cookie("admin_token", token, httponly=True)
+    if token and request.cookies.get("admin_token") != token:
+        resp.set_cookie("admin_token", token, **_cookie_kwargs(request, 24 * 3600))
     return resp
+
+
+async def _fetch_oidc_discovery():
+    global _OIDC_DISCOVERY_CACHE
+    if _OIDC_DISCOVERY_CACHE:
+        return _OIDC_DISCOVERY_CACHE
+    if not OIDC_ISSUER_URL:
+        raise RuntimeError("OIDC_ISSUER_URL is not set")
+    session = get_http_session()
+    if session is None:
+        raise RuntimeError("HTTP session not ready")
+    url = OIDC_ISSUER_URL + "/.well-known/openid-configuration"
+    async with session.get(url, ssl=OIDC_VERIFY_TLS, timeout=20) as resp:
+        if resp.status >= 400:
+            text = await resp.text()
+            raise RuntimeError(
+                f"OIDC discovery failed: {resp.status} {text[:200]}"
+            )
+        _OIDC_DISCOVERY_CACHE = await resp.json()
+    issuer = str(_OIDC_DISCOVERY_CACHE.get("issuer", "")).rstrip("/")
+    configured = str(OIDC_ISSUER_URL).rstrip("/")
+    if issuer not in {"", configured}:
+        raise RuntimeError("OIDC issuer mismatch")
+    for key in ("authorization_endpoint", "token_endpoint"):
+        if not _OIDC_DISCOVERY_CACHE.get(key):
+            raise RuntimeError(f"OIDC discovery missing {key}")
+    return _OIDC_DISCOVERY_CACHE
+
+
+async def _fetch_oidc_jwks(discovery):
+    global _OIDC_JWKS_CACHE
+    if _OIDC_JWKS_CACHE:
+        return _OIDC_JWKS_CACHE
+    jwks_uri = discovery.get("jwks_uri", "")
+    if not jwks_uri:
+        raise RuntimeError("OIDC discovery missing jwks_uri")
+    session = get_http_session()
+    if session is None:
+        raise RuntimeError("HTTP session not ready")
+    async with session.get(jwks_uri, ssl=OIDC_VERIFY_TLS, timeout=20) as resp:
+        if resp.status >= 400:
+            text = await resp.text()
+            raise RuntimeError(
+                f"OIDC JWKS fetch failed: {resp.status} {text[:200]}"
+            )
+        _OIDC_JWKS_CACHE = await resp.json()
+    return _OIDC_JWKS_CACHE
+
+
+def _pick_jwk_key(jwks, token_header):
+    if not isinstance(jwks, dict):
+        return None
+    keys = jwks.get("keys", [])
+    if not isinstance(keys, list):
+        return None
+    kid = token_header.get("kid")
+    alg = token_header.get("alg")
+    for key in keys:
+        if kid and key.get("kid") != kid:
+            continue
+        if alg and key.get("alg") and key.get("alg") != alg:
+            continue
+        return key
+    return None
+
+
+async def _validate_oidc_id_token(id_token, discovery, expected_nonce):
+    try:
+        token_header = jwt.get_unverified_header(id_token)
+    except Exception as exc:
+        raise web.HTTPUnauthorized(text=f"invalid id_token header: {exc}")
+    alg = str(token_header.get("alg", "")).upper()
+    if alg in {"NONE", "HS256", "HS384", "HS512"}:
+        raise web.HTTPUnauthorized(text="unsupported id_token algorithm")
+    jwks = await _fetch_oidc_jwks(discovery)
+    jwk_key = _pick_jwk_key(jwks, token_header)
+    if not jwk_key:
+        raise web.HTTPUnauthorized(text="unable to resolve id_token signing key")
+    try:
+        verify_key = jwt.PyJWK.from_dict(jwk_key).key
+        claims = jwt.decode(
+            id_token,
+            key=verify_key,
+            algorithms=[alg],
+            audience=OIDC_CLIENT_ID,
+            leeway=OIDC_CLOCK_SKEW_SECONDS,
+            options={
+                "require": ["iss", "sub", "aud", "exp", "iat"],
+            },
+        )
+    except Exception as exc:
+        raise web.HTTPUnauthorized(text=f"invalid id_token: {exc}")
+    if str(claims.get("iss", "")).rstrip("/") != str(OIDC_ISSUER_URL).rstrip("/"):
+        raise web.HTTPUnauthorized(text="invalid id_token issuer")
+    if expected_nonce and claims.get("nonce") != expected_nonce:
+        raise web.HTTPUnauthorized(text="invalid id_token nonce")
+    return claims
+
+
+async def _fetch_oidc_userinfo(access_token, discovery):
+    session = get_http_session()
+    if session is None:
+        raise RuntimeError("HTTP session not ready")
+    userinfo_endpoint = discovery.get("userinfo_endpoint")
+    if not userinfo_endpoint:
+        return {}
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with session.get(
+        userinfo_endpoint,
+        headers=headers,
+        ssl=OIDC_VERIFY_TLS,
+        timeout=20,
+    ) as resp:
+        if resp.status >= 400:
+            text = await resp.text()
+            raise RuntimeError(
+                f"OIDC userinfo failed: {resp.status} {text[:200]}"
+            )
+        return await resp.json()
+
+
+def _oidc_user_allowed(profile):
+    email = str(profile.get("email", "")).strip().lower()
+    if OIDC_REQUIRE_VERIFIED_EMAIL and not bool(profile.get("email_verified")):
+        return False
+    if OIDC_ALLOWED_EMAILS and email not in OIDC_ALLOWED_EMAILS:
+        return False
+    if OIDC_ALLOWED_DOMAINS:
+        if "@" not in email:
+            return False
+        domain = email.split("@", 1)[1]
+        if domain not in OIDC_ALLOWED_DOMAINS:
+            return False
+    return True
+
+
+async def oidc_login(request):
+    if not _oidc_ready():
+        raise web.HTTPServiceUnavailable(text="oidc auth is not configured")
+    _enforce_auth_rate_limit(request, "oidc_login")
+    discovery = await _fetch_oidc_discovery()
+    state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = _pkce_challenge(code_verifier)
+    next_path = _sanitize_next_path(request.query.get("next", "/admin"))
+    state_cookie = _make_signed_cookie_value(
+        {
+            "state": state,
+            "nonce": nonce,
+            "next": next_path,
+            "code_verifier": code_verifier,
+        },
+        ttl_seconds=OIDC_STATE_TTL_SECONDS,
+    )
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": OIDC_CLIENT_ID,
+            "redirect_uri": OIDC_REDIRECT_URI,
+            "scope": OIDC_SCOPES,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    location = discovery["authorization_endpoint"] + "?" + query
+    resp = web.HTTPFound(location)
+    resp.set_cookie(
+        OIDC_STATE_COOKIE,
+        state_cookie,
+        **_cookie_kwargs(request, OIDC_STATE_TTL_SECONDS),
+    )
+    raise resp
+
+
+async def oidc_callback(request):
+    if not _oidc_ready():
+        raise web.HTTPServiceUnavailable(text="oidc auth is not configured")
+    _enforce_auth_rate_limit(request, "oidc_callback")
+    state_cookie = _read_signed_cookie_value(
+        request.cookies.get(OIDC_STATE_COOKIE, "")
+    )
+    state = request.query.get("state", "")
+    if not state_cookie or state_cookie.get("state") != state:
+        raise web.HTTPUnauthorized(text="invalid oidc state")
+    code_verifier = str(state_cookie.get("code_verifier", "")).strip()
+    if not code_verifier:
+        raise web.HTTPUnauthorized(text="missing oidc code verifier")
+    expected_nonce = str(state_cookie.get("nonce", "")).strip()
+    if not expected_nonce:
+        raise web.HTTPUnauthorized(text="missing oidc nonce")
+    code = request.query.get("code", "")
+    if not code:
+        raise web.HTTPUnauthorized(text="missing oidc code")
+    discovery = await _fetch_oidc_discovery()
+    token_endpoint = discovery.get("token_endpoint")
+    if not token_endpoint:
+        raise web.HTTPServiceUnavailable(text="oidc token endpoint missing")
+    session = get_http_session()
+    if session is None:
+        raise web.HTTPServiceUnavailable(text="HTTP session not ready")
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": OIDC_REDIRECT_URI,
+        "client_id": OIDC_CLIENT_ID,
+        "client_secret": OIDC_CLIENT_SECRET,
+        "code_verifier": code_verifier,
+    }
+    async with session.post(
+        token_endpoint,
+        data=data,
+        ssl=OIDC_VERIFY_TLS,
+        timeout=20,
+    ) as resp:
+        if resp.status >= 400:
+            text = await resp.text()
+            raise web.HTTPUnauthorized(
+                text=f"oidc token exchange failed: {resp.status} {text[:200]}"
+            )
+        token_response = await resp.json()
+    access_token = token_response.get("access_token")
+    if not access_token:
+        raise web.HTTPUnauthorized(text="missing access token")
+    id_token = token_response.get("id_token")
+    if not id_token:
+        raise web.HTTPUnauthorized(text="missing id_token")
+    claims = await _validate_oidc_id_token(
+        id_token=id_token,
+        discovery=discovery,
+        expected_nonce=expected_nonce,
+    )
+    try:
+        profile = await _fetch_oidc_userinfo(access_token, discovery)
+    except Exception:
+        profile = {}
+    merged_profile = dict(claims)
+    merged_profile.update(
+        {k: v for k, v in profile.items() if k not in {"sub"}}
+    )
+    sub = str(merged_profile.get("sub", "")).strip()
+    if not sub:
+        raise web.HTTPUnauthorized(text="missing oidc subject")
+    if not _oidc_user_allowed(merged_profile):
+        raise web.HTTPForbidden(text="oidc user not allowed")
+    session_cookie = _make_signed_cookie_value(
+        {
+            "sub": sub,
+            "email": str(merged_profile.get("email", "")).strip().lower(),
+            "name": str(merged_profile.get("name", "")).strip(),
+        },
+        ttl_seconds=OIDC_SESSION_TTL_SECONDS,
+    )
+    next_path = _sanitize_next_path(state_cookie.get("next", "/admin"))
+    resp = web.HTTPFound(next_path)
+    resp.del_cookie(OIDC_STATE_COOKIE)
+    resp.set_cookie(
+        OIDC_SESSION_COOKIE,
+        session_cookie,
+        **_cookie_kwargs(request, OIDC_SESSION_TTL_SECONDS),
+    )
+    raise resp
+
+
+async def oidc_logout(request):
+    resp = web.HTTPFound("/auth/login")
+    secure = _request_is_secure(request)
+    resp.del_cookie(OIDC_SESSION_COOKIE, path="/", samesite="Lax", secure=secure)
+    resp.del_cookie(OIDC_STATE_COOKIE, path="/", samesite="Lax", secure=secure)
+    resp.del_cookie("admin_token", path="/", samesite="Lax", secure=secure)
+    raise resp
+
+
+@web.middleware
+async def security_headers_middleware(request, handler):
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net "
+            "https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        ),
+    )
+    return response
 
 
 def _worker_running(name):
@@ -2768,7 +3255,9 @@ async def dead_letter_clear_api(request):
 
 async def create_web_app():
 
-    app = web.Application()
+    app = web.Application(
+        middlewares=[security_headers_middleware],
+    )
 
     app.router.add_get(
         "/health",
@@ -2778,6 +3267,18 @@ async def create_web_app():
     app.router.add_get(
         "/metrics",
         metrics,
+    )
+    app.router.add_get(
+        "/auth/login",
+        oidc_login,
+    )
+    app.router.add_get(
+        "/auth/callback",
+        oidc_callback,
+    )
+    app.router.add_get(
+        "/auth/logout",
+        oidc_logout,
     )
     app.router.add_get(
         "/admin",

@@ -17,7 +17,16 @@ services:
       - "8081:8081"
     environment:
       NTFY_BASE_URL: "http://ntfy"
+      # Static admin token
       ADMIN_TOKEN: "change-me"
+
+      # OIDC login (when ADMIN_TOKEN is empty)
+      # OIDC_ENABLED: "true"
+      # OIDC_ISSUER_URL: "https://sso.example.com/realms/main"
+      # OIDC_CLIENT_ID: "ntfy-forwarder"
+      # OIDC_CLIENT_SECRET: "..."
+      # OIDC_REDIRECT_URI: "https://forwarder.example.com/auth/callback"
+      # OIDC_SESSION_SECRET: "change-me-long-random-secret"
       BOOTSTRAP_TOPICS: "topic-a,topic-b"
       TZ: "Europe/Paris"
       LOG_LEVEL: "INFO"
@@ -49,12 +58,42 @@ Active targets are auto-detected from configured env vars:
 
 ### Required
 - `NTFY_BASE_URL` (default: `http://ntfy`)
-- `NTFY_TOKEN`
-- `ADMIN_TOKEN` (required for admin UI)
+- `NTFY_TOKEN` (optional)
+- `ADMIN_TOKEN` (optional)
+- `ADMIN_ALLOW_QUERY_TOKEN` (default: `true`)
 - `ADMIN_RECENT_EVENTS` (default: `50`)
 - `DB_PATH` (default: `/app/data/ntfy.db`)
 - `TZ` (default: `UTC`)
 - `LOG_LEVEL` (default: `INFO`)
+
+### Admin Auth (OIDC fallback)
+- `OIDC_ENABLED` (default: `false`)
+- `OIDC_ISSUER_URL` (required when OIDC is enabled)
+- `OIDC_CLIENT_ID` (required when OIDC is enabled)
+- `OIDC_CLIENT_SECRET` (required when OIDC is enabled)
+- `OIDC_REDIRECT_URI` (required when OIDC is enabled)
+- `OIDC_SESSION_SECRET` (required when OIDC is enabled)
+- `OIDC_SESSION_TTL_SECONDS` (default: `86400`)
+- `OIDC_STATE_TTL_SECONDS` (default: `300`)
+- `OIDC_CLOCK_SKEW_SECONDS` (default: `60`)
+- `OIDC_SCOPES` (default: `openid profile email`)
+- `OIDC_ALLOWED_EMAILS` (optional, comma-separated)
+- `OIDC_ALLOWED_DOMAINS` (optional, comma-separated)
+- `OIDC_VERIFY_TLS` (default: `true`)
+- `OIDC_REQUIRE_VERIFIED_EMAIL` (default: `false`)
+
+Auth behavior:
+- If `ADMIN_TOKEN` is set, token auth is accepted (`?token=...`, `X-Admin-Token`, cookie).
+- If OIDC is configured, OIDC session auth is also accepted.
+- Both can coexist at the same time:
+  - use token for Telegram deep links
+  - use OIDC login for normal browser access
+
+Security recommendations:
+- Set `ADMIN_ALLOW_QUERY_TOKEN=false` to avoid token leaks in URLs when possible.
+- Keep `OIDC_VERIFY_TLS=true` in production.
+- Set `OIDC_ALLOWED_EMAILS` or `OIDC_ALLOWED_DOMAINS` to restrict admin access.
+- OIDC login enforces PKCE (`S256`) and validates `id_token` signature/claims.
 
 ### Targets
 - `TELEGRAM_BOT_TOKEN`
@@ -105,11 +144,16 @@ Active targets are auto-detected from configured env vars:
 - `GET /metrics`
 
 ### Admin Pages
-- `GET /admin?token=...`
-- `GET /admin/stats?token=...`
-- `GET /admin/errors?token=...`
-- `GET /admin/queue?token=...`
-- `GET /admin/topic/{name}?token=...`
+- `GET /admin?token=...` (token mode) or OIDC session
+- `GET /admin/stats?token=...` (token mode) or OIDC session
+- `GET /admin/errors?token=...` (token mode) or OIDC session
+- `GET /admin/queue?token=...` (token mode) or OIDC session
+- `GET /admin/topic/{name}?token=...` (token mode) or OIDC session
+
+### Auth Pages
+- `GET /auth/login`
+- `GET /auth/callback`
+- `GET /auth/logout`
 
 ### Topics API
 - `GET /api/topics?token=...`

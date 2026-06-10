@@ -1,3 +1,5 @@
 aiohttp
 aiosqlite
 prometheus-client
+PyJWT
+cryptography

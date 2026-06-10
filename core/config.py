@@ -55,6 +55,62 @@ DAILY_SUMMARY_HOUR = int(os.getenv("DAILY_SUMMARY_HOUR", "8"))
 DAILY_SUMMARY_MINUTE = int(os.getenv("DAILY_SUMMARY_MINUTE", "0"))
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 ADMIN_RECENT_EVENTS = int(os.getenv("ADMIN_RECENT_EVENTS", "50"))
+ADMIN_ALLOW_QUERY_TOKEN = os.getenv(
+    "ADMIN_ALLOW_QUERY_TOKEN",
+    "true",
+).lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+OIDC_ENABLED = os.getenv("OIDC_ENABLED", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+OIDC_ISSUER_URL = os.getenv("OIDC_ISSUER_URL", "").strip().rstrip("/")
+OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "").strip()
+OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET", "").strip()
+OIDC_REDIRECT_URI = os.getenv("OIDC_REDIRECT_URI", "").strip()
+OIDC_SCOPES = os.getenv("OIDC_SCOPES", "openid profile email").strip()
+OIDC_SESSION_SECRET = os.getenv("OIDC_SESSION_SECRET", "").strip()
+OIDC_SESSION_TTL_SECONDS = int(
+    os.getenv("OIDC_SESSION_TTL_SECONDS", str(24 * 3600))
+)
+OIDC_STATE_TTL_SECONDS = int(
+    os.getenv("OIDC_STATE_TTL_SECONDS", "300")
+)
+OIDC_CLOCK_SKEW_SECONDS = int(
+    os.getenv("OIDC_CLOCK_SKEW_SECONDS", "60")
+)
+OIDC_ALLOWED_EMAILS = tuple(
+    v.strip().lower()
+    for v in os.getenv("OIDC_ALLOWED_EMAILS", "").split(",")
+    if v.strip()
+)
+OIDC_ALLOWED_DOMAINS = tuple(
+    v.strip().lower()
+    for v in os.getenv("OIDC_ALLOWED_DOMAINS", "").split(",")
+    if v.strip()
+)
+OIDC_VERIFY_TLS = os.getenv("OIDC_VERIFY_TLS", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+OIDC_REQUIRE_VERIFIED_EMAIL = os.getenv(
+    "OIDC_REQUIRE_VERIFIED_EMAIL",
+    "false",
+).lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 GENERIC_WEBHOOK_URL = os.getenv("GENERIC_WEBHOOK_URL", "").strip()
 GENERIC_WEBHOOK_AUTH_HEADER = os.getenv(
