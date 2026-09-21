@@ -79,3 +79,11 @@ async def count_messages_by_topic_since(since_ts):
         row["topic"]: int(row["c"])
         for row in rows
     }
+
+
+async def clear_all_messages():
+    conn = await db()
+    await conn.execute("DELETE FROM messages")
+    await conn.execute("DELETE FROM messages_fts")
+    await conn.commit()
+    await conn.close()

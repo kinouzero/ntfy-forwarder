@@ -2,27 +2,26 @@ import asyncio
 import time
 
 from db.client import db
-
-from core.config import (
-    RETENTION_DAYS,
-    ERROR_RETENTION_DAYS,
-)
+from db.settings import get_settings_snapshot
 from core.state import shutdown_event
 
 async def retention_loop():
 
     while not shutdown_event.is_set():
+        settings = await get_settings_snapshot()
+        retention_days = int(settings["retention_days"])
+        error_retention_days = int(settings["error_retention_days"])
 
         conn = await db()
 
         msg_limit = (
             int(time.time())
-            - (RETENTION_DAYS * 86400)
+            - (retention_days * 86400)
         )
 
         err_limit = (
             int(time.time())
-            - (ERROR_RETENTION_DAYS * 86400)
+            - (error_retention_days * 86400)
         )
 
         await conn.execute(

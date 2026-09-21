@@ -1,13 +1,6 @@
 import aiohttp
 
 from core.http import get_http_session
-from core.config import TG_TOKEN
-
-TG_API = (
-    f"https://api.telegram.org/bot{TG_TOKEN}"
-    if TG_TOKEN
-    else None
-)
 
 
 class TelegramAPIError(RuntimeError):
@@ -27,12 +20,11 @@ class TelegramAPIError(RuntimeError):
         self.retryable = retryable
 
 
-async def tg_call(method, payload):
-
-    if TG_API is None:
-        raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN is not set"
-        )
+async def tg_call(method, payload, token):
+    token = str(token or "").strip()
+    if not token:
+        raise RuntimeError("telegram bot token is missing")
+    tg_api = f"https://api.telegram.org/bot{token}"
 
     session = get_http_session()
     if session is None:
@@ -40,7 +32,7 @@ async def tg_call(method, payload):
 
     try:
         async with session.post(
-            f"{TG_API}/{method}",
+            f"{tg_api}/{method}",
             json=payload,
             timeout=60,
         ) as resp:

@@ -119,6 +119,35 @@ async def init_db():
     )
     ''')
 
+    await conn.execute('''
+    CREATE TABLE IF NOT EXISTS delivery_targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        config TEXT NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        is_default INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    ''')
+
+    await conn.execute('''
+    CREATE TABLE IF NOT EXISTS topic_target_map (
+        topic TEXT PRIMARY KEY,
+        target_id INTEGER,
+        updated_at INTEGER NOT NULL
+    )
+    ''')
+
+    await conn.execute('''
+    CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    ''')
+
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)"
     )
@@ -130,6 +159,18 @@ async def init_db():
     )
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_topics_enabled ON topics(enabled)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_delivery_targets_enabled "
+        "ON delivery_targets(enabled)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_topic_target_map_target "
+        "ON topic_target_map(target_id)"
+    )
+    await conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_targets_single_default "
+        "ON delivery_targets(is_default) WHERE is_default = 1"
     )
 
     await conn.commit()

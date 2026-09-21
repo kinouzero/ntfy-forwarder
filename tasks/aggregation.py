@@ -1,10 +1,5 @@
 import asyncio
 
-from core.config import (
-    AGGREGATION_INTERVAL,
-    AGGREGATION_MIN_COUNT,
-)
-
 from core.state import (
     aggregation_buffer,
     shutdown_event,
@@ -14,14 +9,18 @@ from services.formatter import build_message
 from services.queue import enqueue_telegram
 from utils.markdown import escape_md
 from db.topics import is_topic_enabled
+from db.settings import get_settings_snapshot
 from core.logging import log
 
 async def aggregation_loop():
 
     while not shutdown_event.is_set():
+        settings = await get_settings_snapshot()
+        interval = int(settings["aggregation_interval"])
+        min_count = int(settings["aggregation_min_count"])
 
         await asyncio.sleep(
-            AGGREGATION_INTERVAL
+            interval
         )
 
         for topic, events in list(
@@ -41,7 +40,7 @@ async def aggregation_loop():
                 aggregation_buffer[topic].clear()
                 continue
 
-            if len(events) < AGGREGATION_MIN_COUNT:
+            if len(events) < min_count:
 
                 for event in events:
 

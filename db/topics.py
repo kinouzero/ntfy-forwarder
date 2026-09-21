@@ -140,6 +140,82 @@ async def reset_topic_count_base(name):
     await conn.close()
 
 
+async def reset_all_topic_count_bases():
+    conn = await db()
+    await conn.execute(
+        '''
+        UPDATE topics
+        SET reset_count_base = count,
+            updated_at = ?
+        ''',
+        (int(time.time()),),
+    )
+    await conn.commit()
+    await conn.close()
+
+
+async def clear_topic_status_counts(name):
+    conn = await db()
+    await conn.execute(
+        '''
+        INSERT INTO topic_status_counts(
+            topic,
+            received,
+            filtered,
+            rate_limited,
+            disabled,
+            updated_at
+        )
+        VALUES (?, 0, 0, 0, 0, ?)
+        ON CONFLICT(topic) DO UPDATE SET
+            received = 0,
+            filtered = 0,
+            rate_limited = 0,
+            disabled = 0,
+            updated_at = ?
+        ''',
+        (
+            name,
+            int(time.time()),
+            int(time.time()),
+        ),
+    )
+    await conn.commit()
+    await conn.close()
+
+
+async def clear_all_topic_status_counts():
+    conn = await db()
+    await conn.execute(
+        '''
+        UPDATE topic_status_counts
+        SET received = 0,
+            filtered = 0,
+            rate_limited = 0,
+            disabled = 0,
+            updated_at = ?
+        ''',
+        (int(time.time()),),
+    )
+    await conn.commit()
+    await conn.close()
+
+
+async def hard_reset_all_topic_counts():
+    conn = await db()
+    await conn.execute(
+        '''
+        UPDATE topics
+        SET count = 0,
+            reset_count_base = 0,
+            updated_at = ?
+        ''',
+        (int(time.time()),),
+    )
+    await conn.commit()
+    await conn.close()
+
+
 async def increment_topic_status_count(name, field, delta=1):
     if field not in {"received", "filtered", "rate_limited", "disabled"}:
         raise ValueError(f"invalid status field: {field}")

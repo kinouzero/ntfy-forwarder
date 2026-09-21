@@ -233,6 +233,35 @@ async def test_send_telegram_message_high_priority_not_silent(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_telegram_message_fallbacks_to_plain_text_on_markdown_error(monkeypatch):
+    from tasks import delivery_sender as telegram_sender
+    from services.telegram import TelegramAPIError
+
+    calls = []
+
+    async def fake_tg_call(method, payload):
+        calls.append((method, payload))
+        if len(calls) == 1:
+            raise TelegramAPIError(
+                "Bad Request: can't parse entities",
+                status_code=400,
+                retryable=False,
+            )
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_sender, "tg_call", fake_tg_call)
+    monkeypatch.setattr(telegram_sender, "TELEGRAM_MAX_MESSAGE_LENGTH", 4096)
+
+    await telegram_sender.send_telegram_message("hello-world", priority=3)
+
+    assert len(calls) == 2
+    assert calls[0][0] == "sendMessage"
+    assert calls[0][1]["parse_mode"] == "MarkdownV2"
+    assert calls[1][0] == "sendMessage"
+    assert "parse_mode" not in calls[1][1]
+
+
+@pytest.mark.asyncio
 async def test_process_queue_item_marks_non_retryable_dead(monkeypatch):
     from tasks import delivery_sender as telegram_sender
     from services.telegram import TelegramAPIError

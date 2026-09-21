@@ -19,14 +19,10 @@ from core.state import (
 from core.config import (
     NTFY_BASE_URL,
     NTFY_TOKEN,
-    MAX_AGGREGATION_BUFFER,
-    MAX_DIGEST_BUFFER,
-    DB_BATCH_SIZE,
-    DB_BATCH_FLUSH_SECONDS,
     ADMIN_RECENT_EVENTS,
 )
 
-from utils.quiet_hours import in_quiet_hours
+from utils.quiet_hours import in_quiet_hours_window
 
 from models.event import NtfyEvent
 
@@ -40,6 +36,7 @@ from db.topics import (
 )
 from db.dead_letter import move_to_dead_letter
 from db.errors import log_error
+from db.settings import get_settings_snapshot
 
 from core.metrics import (
     ntfy_messages_total,
@@ -53,19 +50,8 @@ from core.metrics import (
     event_process_seconds,
 )
 
-async def ntfy_worker(topic):
-    headers = {}
 
-    if NTFY_TOKEN:
-        headers["Authorization"] = (
-            f"Bearer {NTFY_TOKEN}"
-        )
-
-    url = f"{NTFY_BASE_URL}/{topic}/json"
-
-    backoff = 1
-    buffer = []
-    last_flush = time.monotonic()
+def _ensure_topic_runtime(topic):
     topic_stats.setdefault(
         topic,
         {
@@ -86,8 +72,25 @@ async def ntfy_worker(topic):
         deque(maxlen=60),
     )
 
+
+async def ntfy_worker(topic):
+    headers = {}
+
+    if NTFY_TOKEN:
+        headers["Authorization"] = (
+            f"Bearer {NTFY_TOKEN}"
+        )
+
+    url = f"{NTFY_BASE_URL}/{topic}/json"
+
+    backoff = 1
+    buffer = []
+    last_flush = time.monotonic()
+    _ensure_topic_runtime(topic)
+
     async def flush_buffer():
         nonlocal buffer, last_flush
+        _ensure_topic_runtime(topic)
         if not buffer:
             return
 
@@ -141,6 +144,7 @@ async def ntfy_worker(topic):
             buffered=len(buffer),
             inserted=inserted_count,
         )
+        settings = await get_settings_snapshot()
 
         for ok, evt in zip(inserted, events):
             if not ok:
@@ -168,7 +172,7 @@ async def ntfy_worker(topic):
             ).append(evt)
             if (
                 len(aggregation_buffer[topic])
-                > MAX_AGGREGATION_BUFFER
+                > settings["max_aggregation_buffer"]
             ):
                 aggregation_buffer[topic].pop(0)
                 aggregation_dropped_total.labels(
@@ -176,7 +180,7 @@ async def ntfy_worker(topic):
                 ).inc()
 
             if topic in digest_buffer or (
-                len(digest_buffer) < MAX_DIGEST_BUFFER
+                len(digest_buffer) < settings["max_digest_buffer"]
             ):
                 digest_buffer[topic] = (
                     digest_buffer.get(topic, 0) + 1
@@ -230,6 +234,7 @@ async def ntfy_worker(topic):
                     if raw.get("event") != "message":
                         continue
 
+                    _ensure_topic_runtime(topic)
                     worker_last_seen[topic] = int(time.time())
                     ntfy_messages_total.labels(topic=topic).inc()
                     topic_stats[topic]["received"] += 1
@@ -269,10 +274,11 @@ async def ntfy_worker(topic):
                         )
                         continue
 
-                    if (
-                        in_quiet_hours()
-                        and event.priority < 4
-                    ):
+                    settings = await get_settings_snapshot()
+                    if in_quiet_hours_window(
+                        settings["quiet_hours_start"],
+                        settings["quiet_hours_end"],
+                    ) and event.priority < 4:
                         log("DEBUG", "filtered", topic=topic, reason="quiet_hours")
                         ntfy_messages_filtered_total.labels(
                             topic=topic,
@@ -285,9 +291,9 @@ async def ntfy_worker(topic):
                     buffer.append((raw, event))
 
                     if (
-                        len(buffer) >= DB_BATCH_SIZE
+                        len(buffer) >= settings["db_batch_size"]
                         or time.monotonic() - last_flush
-                        >= DB_BATCH_FLUSH_SECONDS
+                        >= settings["db_batch_flush_seconds"]
                     ):
                         await flush_buffer()
 
@@ -304,6 +310,7 @@ async def ntfy_worker(topic):
                     await flush_buffer()
 
         except Exception as e:
+            _ensure_topic_runtime(topic)
 
             await log_error(
                 "ntfy_worker",

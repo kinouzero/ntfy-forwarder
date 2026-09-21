@@ -20,14 +20,17 @@ def _now_hour():
 
 
 def in_quiet_hours():
+    return in_quiet_hours_window(QUIET_HOURS_START, QUIET_HOURS_END)
 
+
+def in_quiet_hours_window(start_hour, end_hour):
     now = _now_hour()
 
     # Equal boundaries mean the window is disabled.
-    if QUIET_HOURS_START == QUIET_HOURS_END:
+    if start_hour == end_hour:
         return False
 
-    if QUIET_HOURS_START > QUIET_HOURS_END:
-        return now >= QUIET_HOURS_START or now < QUIET_HOURS_END
+    if start_hour > end_hour:
+        return now >= start_hour or now < end_hour
 
-    return QUIET_HOURS_START <= now < QUIET_HOURS_END
+    return start_hour <= now < end_hour

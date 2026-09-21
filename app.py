@@ -15,7 +15,6 @@ from core.http import (
 )
 
 from core.config import (
-    BOOTSTRAP_TOPICS,
     NTFY_BASE_URL,
     LOG_LEVEL,
     TZ,
@@ -23,7 +22,7 @@ from core.config import (
 )
 
 from db.schema import init_db
-from db.topics import add_topic
+from db.topics import list_topics
 
 from services.ntfy import ntfy_worker
 from services.plugins import load_plugins
@@ -47,16 +46,9 @@ def validate_config():
 
 
 async def bootstrap_topics():
-
-    topics = [
-        t.strip()
-        for t in BOOTSTRAP_TOPICS.split(",")
-        if t.strip()
-    ]
-
+    rows = await list_topics()
+    topics = [str(r["name"]).strip() for r in rows if str(r["name"]).strip()]
     for topic in topics:
-
-        await add_topic(topic)
 
         task = asyncio.create_task(
             ntfy_worker(topic)
@@ -95,31 +87,22 @@ async def main():
 
     await create_http_session()
 
-    if not ACTIVE_TARGETS:
-        log(
-            "WARN",
-            "all delivery targets disabled",
-        )
-    else:
-        log("INFO", "active targets", targets=list(ACTIVE_TARGETS))
-
     await load_plugins()
 
     await bootstrap_topics()
 
     background_tasks = []
 
-    if ACTIVE_TARGETS:
-        background_tasks.append(
-            asyncio.create_task(
-                delivery_sender_loop()
-            )
+    background_tasks.append(
+        asyncio.create_task(
+            delivery_sender_loop()
         )
-        background_tasks.append(
-            asyncio.create_task(
-                daily_summary_loop()
-            )
+    )
+    background_tasks.append(
+        asyncio.create_task(
+            daily_summary_loop()
         )
+    )
 
     background_tasks.extend(
         [

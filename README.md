@@ -1,11 +1,20 @@
 # Ntfy Forwarder
 
-`ntfy` forwarder to multiple targets (Telegram, Discord, Slack, WhatsApp, webhook), with:
-- web admin interface
-- SQLite persistence
-- filters / quiet hours / rate limiting
-- queue + retry + DLQ
+Forward `ntfy` messages to configurable targets (Telegram / Discord / Slack / generic webhook) with:
+- Web UI
+- Topic-to-target routing
+- Queue, retry, dead-letter queue (DLQ)
+- Error history and exports
 - Prometheus metrics
+
+## Overview
+
+This project is now **UI-driven** for runtime config:
+- Topics are managed in the app
+- Targets are managed in the app
+- Queue/behavior/performance/summary settings are managed in the app
+
+No environment variables are used anymore for topics/targets/settings categories.
 
 ## Quick Start
 
@@ -17,125 +26,106 @@ services:
       - "8081:8081"
     environment:
       NTFY_BASE_URL: "http://ntfy"
-      # Static admin token
-      ADMIN_TOKEN: "change-me"
+      ACCESS_TOKEN: "change-me"
+      TZ: "Europe/Paris"
+      LOG_LEVEL: "INFO"
 
-      # OIDC login (when ADMIN_TOKEN is empty)
+      # Optional OIDC
       # OIDC_ENABLED: "true"
-      # OIDC_ISSUER_URL: "https://sso.example.com/realms/main"
+      # OIDC_ISSUER_URL: "https://sso.example.com/application/o/forwarder/"
       # OIDC_CLIENT_ID: "ntfy-forwarder"
       # OIDC_CLIENT_SECRET: "..."
       # OIDC_REDIRECT_URI: "https://forwarder.example.com/auth/callback"
       # OIDC_SESSION_SECRET: "change-me-long-random-secret"
-      BOOTSTRAP_TOPICS: "topic-a,topic-b"
-      TZ: "Europe/Paris"
-      LOG_LEVEL: "INFO"
 
-      # Targets are auto-detected based on env vars
-      TELEGRAM_BOT_TOKEN: "..."
-      TELEGRAM_ADMIN_CHAT_ID: "123456789"
-      DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/..."
-      SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/..."
-      GENERIC_WEBHOOK_URL: "https://example.com/webhook"
-      # GENERIC_WEBHOOK_AUTH_HEADER: "Bearer ..."
-
-      # WhatsApp Cloud API (optional)
-      # WHATSAPP_PHONE_NUMBER_ID: "..."
-      # WHATSAPP_ACCESS_TOKEN: "..."
-      # WHATSAPP_TO: "..."
+      # Optional local login
+      # ACCESS_LOCAL_ENABLED: "true"
+      # ACCESS_LOCAL_USERNAME: "admin"
+      # ACCESS_LOCAL_PASSWORD: "change-me"
 ```
 
-## Target Activation
+Then:
+1. Open `/targets` and create at least one target.
+2. Mark one target as default.
+3. Open `/` and assign per-topic targets if needed.
+4. Open `/settings` to tune runtime behavior.
 
-Active targets are auto-detected from configured env vars:
-- `telegram`: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID`
-- `discord`: `DISCORD_WEBHOOK_URL`
-- `slack`: `SLACK_WEBHOOK_URL`
-- `webhook`: `GENERIC_WEBHOOK_URL`
-- `whatsapp`: `WHATSAPP_PHONE_NUMBER_ID` + `WHATSAPP_ACCESS_TOKEN` + `WHATSAPP_TO`
+## Target Model
+
+Supported target kinds:
+- `telegram`
+- `webhook_discord`
+- `webhook_slack`
+- `webhook_generic`
+
+Target configs:
+- `telegram`: `chat_id`, `bot_token`, `max_message_length`
+- `webhook_*`: `url`, optional `auth_header`
+
+Routing behavior:
+- If a topic has a linked target, it is used.
+- Otherwise the default target is used.
+
+## Runtime Settings (UI)
+
+All of these are configured from `/settings`:
+- Retry / queue
+- Behavior
+- Performance / maintenance
+- Aggregation / digest / summary
 
 ## Environment Variables
 
-### Required
+### Core
 - `NTFY_BASE_URL` (default: `http://ntfy`)
 - `NTFY_TOKEN` (optional)
-- `ADMIN_TOKEN` (optional)
-- `ADMIN_ALLOW_QUERY_TOKEN` (default: `true`)
-- `ADMIN_RECENT_EVENTS` (default: `50`)
 - `DB_PATH` (default: `/app/data/ntfy.db`)
 - `TZ` (default: `UTC`)
 - `LOG_LEVEL` (default: `INFO`)
 
-### Admin Auth (OIDC fallback)
+### Access
+- `ACCESS_TOKEN` (optional)
+- `ACCESS_ALLOW_QUERY_TOKEN` (default: `true`)
+- `ACCESS_SESSION_SECRET` (optional, fallback: `OIDC_SESSION_SECRET`)
+
+### Access (OIDC)
 - `OIDC_ENABLED` (default: `false`)
-- `OIDC_ISSUER_URL` (required when OIDC is enabled)
-- `OIDC_CLIENT_ID` (required when OIDC is enabled)
-- `OIDC_CLIENT_SECRET` (required when OIDC is enabled)
-- `OIDC_REDIRECT_URI` (required when OIDC is enabled)
-- `OIDC_SESSION_SECRET` (required when OIDC is enabled)
+- `OIDC_ISSUER_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_CLIENT_SECRET`
+- `OIDC_REDIRECT_URI`
+- `OIDC_SESSION_SECRET`
 - `OIDC_SESSION_TTL_SECONDS` (default: `86400`)
 - `OIDC_STATE_TTL_SECONDS` (default: `300`)
 - `OIDC_CLOCK_SKEW_SECONDS` (default: `60`)
 - `OIDC_SCOPES` (default: `openid profile email`)
-- `OIDC_ALLOWED_EMAILS` (optional, comma-separated)
-- `OIDC_ALLOWED_DOMAINS` (optional, comma-separated)
+- `OIDC_ALLOWED_EMAILS` (optional)
+- `OIDC_ALLOWED_DOMAINS` (optional)
 - `OIDC_VERIFY_TLS` (default: `true`)
 - `OIDC_REQUIRE_VERIFIED_EMAIL` (default: `false`)
+- `OIDC_LOGIN_TEXT` (default: `Login with SSO`)
+- `OIDC_LOGIN_ICON` (default: `bi-shield-lock`)
 
-Auth behavior:
-- If `ADMIN_TOKEN` is set, token auth is accepted (`?token=...`, `X-Admin-Token`, cookie).
-- If OIDC is configured, OIDC session auth is also accepted.
-- Both can coexist at the same time:
-  - use token for Telegram deep links
-  - use OIDC login for normal browser access
+### Access (Local Login)
+- `ACCESS_LOCAL_ENABLED` (default: `false`)
+- `ACCESS_LOCAL_USERNAME`
+- `ACCESS_LOCAL_PASSWORD`
+- `ACCESS_LOCAL_SESSION_TTL_SECONDS` (default: `86400`)
 
-Security recommendations:
-- Set `ADMIN_ALLOW_QUERY_TOKEN=false` to avoid token leaks in URLs when possible.
-- Keep `OIDC_VERIFY_TLS=true` in production.
-- Set `OIDC_ALLOWED_EMAILS` or `OIDC_ALLOWED_DOMAINS` to restrict admin access.
-- OIDC login enforces PKCE (`S256`) and validates `id_token` signature/claims.
+## Web Pages
 
-### Targets
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ADMIN_CHAT_ID`
-- `TELEGRAM_MAX_MESSAGE_LENGTH` (default: `4096`)
-- `DISCORD_WEBHOOK_URL`
-- `SLACK_WEBHOOK_URL`
-- `GENERIC_WEBHOOK_URL`
-- `GENERIC_WEBHOOK_AUTH_HEADER` (optional)
-- `WHATSAPP_PHONE_NUMBER_ID`
-- `WHATSAPP_ACCESS_TOKEN`
-- `WHATSAPP_TO`
-- `WHATSAPP_API_BASE` (default: `https://graph.facebook.com`)
-- `WHATSAPP_API_VERSION` (default: `v23.0`)
-
-### Retry / queue
-- `DELIVERY_QUEUE_MAX_ATTEMPTS` (default: `8`)
-- `DELIVERY_QUEUE_BASE_RETRY_SECONDS` (default: `5`)
-- `DELIVERY_QUEUE_MAX_RETRY_SECONDS` (default: `300`)
-
-### Topics
-- `BOOTSTRAP_TOPICS`
-
-### Behavior
-- `QUIET_HOURS_START` (default: `23`)
-- `QUIET_HOURS_END` (default: `7`)
-
-### Performance / maintenance
-- `DB_BATCH_SIZE` (default: `1`)
-- `DB_BATCH_FLUSH_SECONDS` (default: `1`)
-- `RETENTION_DAYS` (default: `30`)
-- `ERROR_RETENTION_DAYS` (default: `7`)
-- `DB_MAINTENANCE_INTERVAL_SECONDS` (default: `3600`)
-
-### Aggregation / digest / summary
-- `AGGREGATION_INTERVAL` (default: `30`)
-- `AGGREGATION_MIN_COUNT` (default: `10`)
-- `MAX_AGGREGATION_BUFFER` (default: `1000`)
-- `MAX_DIGEST_BUFFER` (default: `1000`)
-- `DAILY_SUMMARY_ENABLED` (default: `true`)
-- `DAILY_SUMMARY_HOUR` (default: `8`)
-- `DAILY_SUMMARY_MINUTE` (default: `0`)
+- `GET /`
+- `GET /topic/{name}`
+- `GET /stats`
+- `GET /errors`
+- `GET /queue`
+- `GET /targets`
+- `GET /settings`
+- `GET /login`
+- `GET /logout`
+- `GET /auth/login`
+- `GET /auth/callback`
+- `GET /auth/logout`
 
 ## API
 
@@ -143,44 +133,51 @@ Security recommendations:
 - `GET /health`
 - `GET /metrics`
 
-### Admin Pages
-- `GET /admin?token=...` (token mode) or OIDC session
-- `GET /admin/stats?token=...` (token mode) or OIDC session
-- `GET /admin/errors?token=...` (token mode) or OIDC session
-- `GET /admin/queue?token=...` (token mode) or OIDC session
-- `GET /admin/topic/{name}?token=...` (token mode) or OIDC session
+### Topics
+- `GET /api/topics`
+- `GET /api/topics/{name}`
+- `POST /api/topics/{name}/toggle`
+- `POST /api/topics/{name}/target`
+- `POST /api/topics/{name}/clear`
+- `POST /api/topics/{name}/reset_count`
+- `POST /api/topics/clear_all`
+- `POST /api/topics/hard_clear_all`
+- `POST /api/topics/pause_all`
+- `POST /api/topics/resume_all`
+- `GET /api/topics/export`
+- `POST /api/topics/import`
 
-### Auth Pages
-- `GET /auth/login`
-- `GET /auth/callback`
-- `GET /auth/logout`
+### Targets
+- `GET /api/targets`
+- `POST /api/targets`
+- `PUT /api/targets/{id}`
+- `DELETE /api/targets/{id}`
+- `POST /api/targets/{id}/default`
 
-### Topics API
-- `GET /api/topics?token=...`
-- `GET /api/topics/{name}?token=...`
-- `POST /api/topics/{name}/toggle?token=...`
-- `POST /api/topics/{name}/clear?token=...`
-- `POST /api/topics/{name}/reset_count?token=...`
-- `POST /api/topics/clear_all?token=...`
-- `POST /api/topics/pause_all?token=...`
-- `POST /api/topics/resume_all?token=...`
-- `GET /api/topics/export?token=...`
-- `POST /api/topics/import?token=...`
+### Settings
+- `GET /api/settings`
+- `POST /api/settings`
 
-### Stats / Errors / DLQ API
-- `GET /api/stats?token=...`
-- `GET /api/errors?token=...&q=...&offset=0&limit=100&format=csv`
-- `POST /api/errors/clear?token=...`
-- `GET /api/queue/dead_letters?token=...&q=...&offset=0&limit=100`
-- `POST /api/queue/dead_letters/{id}/requeue?token=...`
-- `POST /api/queue/dead_letters/{id}/delete?token=...`
-- `POST /api/queue/dead_letters/requeue_batch?token=...`
-- `POST /api/queue/dead_letters/clear?token=...`
+### Stats / Errors / DLQ
+- `GET /api/stats`
+- `GET /api/errors?q=...&offset=0&limit=100&format=csv`
+- `POST /api/errors/clear`
+- `GET /api/queue/dead_letters?q=...&offset=0&limit=100`
+- `POST /api/queue/dead_letters/{id}/requeue`
+- `POST /api/queue/dead_letters/{id}/delete`
+- `POST /api/queue/dead_letters/requeue_batch`
+- `POST /api/queue/dead_letters/clear`
+
+## Security Notes
+
+- Prefer cookie/header auth over query token in public environments (`ACCESS_ALLOW_QUERY_TOKEN=false`).
+- Keep `OIDC_VERIFY_TLS=true` in production.
+- Restrict OIDC access with `OIDC_ALLOWED_EMAILS` or `OIDC_ALLOWED_DOMAINS`.
 
 ## Observability
 
-- Dashboard: `observability/grafana-dashboard.json`
-- Alerts: `observability/prometheus-alerts.yml`
+- Grafana dashboard: `observability/grafana-dashboard.json`
+- Prometheus alerts: `observability/prometheus-alerts.yml`
 
 ## Development
 
