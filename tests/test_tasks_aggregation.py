@@ -30,8 +30,9 @@ async def test_aggregation_below_min_sends_individual(monkeypatch):
     async def enqueue(payload):
         sent.append(payload)
     monkeypatch.setattr(agg, "enqueue_telegram", enqueue)
-    monkeypatch.setattr(agg, "AGGREGATION_MIN_COUNT", 3)
-    monkeypatch.setattr(agg, "AGGREGATION_INTERVAL", 0)
+    async def settings():
+        return {"aggregation_min_count": 3, "aggregation_interval": 0}
+    monkeypatch.setattr(agg, "get_settings_snapshot", settings)
     monkeypatch.setattr(agg.asyncio, "sleep", await _one_loop_sleep())
 
     e1 = NtfyEvent.from_json("t1", {"message": "m1"})
@@ -56,8 +57,9 @@ async def test_aggregation_above_min_sends_summary(monkeypatch):
     async def enqueue(payload):
         sent.append(payload)
     monkeypatch.setattr(agg, "enqueue_telegram", enqueue)
-    monkeypatch.setattr(agg, "AGGREGATION_MIN_COUNT", 2)
-    monkeypatch.setattr(agg, "AGGREGATION_INTERVAL", 0)
+    async def settings():
+        return {"aggregation_min_count": 2, "aggregation_interval": 0}
+    monkeypatch.setattr(agg, "get_settings_snapshot", settings)
     monkeypatch.setattr(agg.asyncio, "sleep", await _one_loop_sleep())
 
     e1 = NtfyEvent.from_json("t1", {"message": "m1"})
@@ -82,7 +84,9 @@ async def test_aggregation_drops_disabled_topic(monkeypatch):
     async def enqueue(payload):
         sent.append(payload)
     monkeypatch.setattr(agg, "enqueue_telegram", enqueue)
-    monkeypatch.setattr(agg, "AGGREGATION_INTERVAL", 0)
+    async def settings():
+        return {"aggregation_min_count": 10, "aggregation_interval": 0}
+    monkeypatch.setattr(agg, "get_settings_snapshot", settings)
     monkeypatch.setattr(agg.asyncio, "sleep", await _one_loop_sleep())
 
     e1 = NtfyEvent.from_json("t1", {"message": "m1"})

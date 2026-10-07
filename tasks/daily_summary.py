@@ -4,9 +4,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from core.config import (
-    DAILY_SUMMARY_ENABLED,
-    DAILY_SUMMARY_HOUR,
-    DAILY_SUMMARY_MINUTE,
     TZ,
 )
 from core.state import shutdown_event
@@ -16,6 +13,7 @@ from db.messages import count_messages_by_topic_since
 from db.errors import count_errors_since
 from db.telegram_queue import count_telegram_queue
 from db.dead_letter import count_dead_letters
+from db.settings import get_settings_snapshot
 from services.queue import enqueue_telegram
 from utils.markdown import escape_md
 
@@ -27,10 +25,25 @@ def _summary_tz():
         return ZoneInfo("UTC")
 
 
-def _is_summary_time(now):
+def _is_summary_time(now, hour=8, minute=0):
     return (
-        now.hour == DAILY_SUMMARY_HOUR
-        and now.minute == DAILY_SUMMARY_MINUTE
+        now.hour == int(hour)
+        and now.minute == int(minute)
+    )
+
+
+def _should_send_today(now, last_sent_date, hour=8, minute=0):
+    day_key = now.date().isoformat()
+    if day_key == last_sent_date:
+        return False
+    hour = int(hour)
+    minute = int(minute)
+    return (
+        (now.hour > hour)
+        or (
+            now.hour == hour
+            and now.minute >= minute
+        )
     )
 
 
@@ -52,9 +65,9 @@ async def _build_daily_summary():
     )[:5]
     top_lines = []
     for name, count in top:
-        top_lines.append(f"- {escape_md(name)}: {count}")
+        top_lines.append(f"• {escape_md(name)}: {count}")
     if not top_lines:
-        top_lines = ["- no events"]
+        top_lines = ["• no events"]
 
     total_24h = sum(counts_24h.values())
     enabled = sum(1 for t in topics if bool(t["enabled"]))
@@ -64,32 +77,35 @@ async def _build_daily_summary():
     rate_limited = sum(v.get("rate_limited", 0) for v in status_counts.values())
 
     return (
-        "📊 *Daily Summary*\\n\\n"
-        f"Total 24h: *{total_24h}*\\n"
-        f"Topics: *{len(topics)}* \\(enabled: {enabled}, disabled: {disabled}\\)\\n"
-        f"Filtered: *{filtered}*\\n"
-        f"Dropped \\(disabled\\): *{disabled_dropped}*\\n"
-        f"Rate limited: *{rate_limited}*\\n"
-        f"Errors 24h: *{error_count}*\\n"
-        f"Queue: *{queue_count}*\\n"
-        f"Dead letters: *{dead_count}*\\n\\n"
-        "*Top topics \\(24h\\)*\\n"
-        + "\\n".join(top_lines)
+        "📊 *Daily Summary*\n\n"
+        f"Total 24h: *{total_24h}*\n"
+        f"Topics: *{len(topics)}* \\(enabled: {enabled}, disabled: {disabled}\\)\n"
+        f"Filtered: *{filtered}*\n"
+        f"Dropped \\(disabled\\): *{disabled_dropped}*\n"
+        f"Rate limited: *{rate_limited}*\n"
+        f"Errors 24h: *{error_count}*\n"
+        f"Queue: *{queue_count}*\n"
+        f"Dead letters: *{dead_count}*\n\n"
+        "*Top topics \\(24h\\)*\n"
+        + "\n".join(top_lines)
     )
 
 
 async def daily_summary_loop():
-    if not DAILY_SUMMARY_ENABLED:
-        log("INFO", "daily summary disabled")
-        return
-
     tz = _summary_tz()
     last_sent_date = None
 
     while not shutdown_event.is_set():
+        settings = await get_settings_snapshot()
+        enabled = bool(settings["daily_summary_enabled"])
+        hour = int(settings["daily_summary_hour"])
+        minute = int(settings["daily_summary_minute"])
+        if not enabled:
+            await asyncio.sleep(30)
+            continue
         now = datetime.now(tz)
         day_key = now.date().isoformat()
-        if _is_summary_time(now) and day_key != last_sent_date:
+        if _should_send_today(now, last_sent_date, hour=hour, minute=minute):
             try:
                 summary = await _build_daily_summary()
                 await enqueue_telegram(

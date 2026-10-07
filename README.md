@@ -21,9 +21,12 @@ No environment variables are used anymore for topics/targets/settings categories
 ```yaml
 services:
   forwarder:
-    image: your-forwarder:latest
+    build: .
+    image: ntfy-forwarder:local
     ports:
       - "8081:8081"
+    volumes:
+      - forwarder_data:/app/data
     environment:
       NTFY_BASE_URL: "http://ntfy"
       ACCESS_TOKEN: "change-me"
@@ -42,7 +45,14 @@ services:
       # ACCESS_LOCAL_ENABLED: "true"
       # ACCESS_LOCAL_USERNAME: "admin"
       # ACCESS_LOCAL_PASSWORD: "change-me"
+
+volumes:
+  forwarder_data:
 ```
+
+Set `NTFY_BASE_URL` to a reachable ntfy server; the example assumes a service
+named `ntfy` on the same Docker network. Run `docker compose up --build -d` and
+open `http://localhost:8081/?token=change-me` using your own private access token.
 
 Then:
 1. Open `/targets` and create at least one target.
@@ -80,6 +90,8 @@ All of these are configured from `/settings`:
 - `NTFY_BASE_URL` (default: `http://ntfy`)
 - `NTFY_TOKEN` (optional)
 - `DB_PATH` (default: `/app/data/ntfy.db`)
+- `EXPORT_DIR` (default: `exports` beside `DB_PATH`)
+- `BACKUP_DIR` (default: `backups` beside `DB_PATH`)
 - `TZ` (default: `UTC`)
 - `LOG_LEVEL` (default: `INFO`)
 
@@ -181,7 +193,45 @@ All of these are configured from `/settings`:
 
 ## Development
 
+Requires Python 3.12 or newer.
+
 ```bash
-pytest -q
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q --cov --cov-report=term-missing --cov-report=html --cov-report=xml
 flake8 --jobs 1 .
 ```
+
+Coverage includes all application modules and branches; `.coveragerc` enforces
+**100% coverage**. Open `htmlcov/index.html` for per-file results. CI runs the same
+check and publishes the HTML/XML reports. Tests use temporary SQLite databases,
+the real `aiosqlite` driver, local HTTP servers and RSA-signed OIDC tokens.
+They require no external Telegram account or ntfy server.
+
+For local use, set `DB_PATH` to a writable path, for example:
+
+```bash
+DB_PATH=./data/ntfy.db ACCESS_TOKEN=your-token NTFY_BASE_URL=http://localhost:8080 python app.py
+```
+
+## Delivery and troubleshooting
+
+- Configure an enabled default target, or a target for each topic. Missing
+  destinations trigger retries and eventual preservation in the dead-letter queue.
+- Runtime behavior uses **Settings** in SQLite. Equal quiet-hours boundaries disable
+  filtering; defaults filter priorities below 4 between 23:00 and 07:00 in `TZ`.
+  The default aggregation interval is 30 seconds.
+- **Errors** shows failures; **Queue** lets you inspect and requeue dead letters.
+  Requeue preserves the topic, title and attachment of raw messages received while
+  a topic was disabled.
+- `/health` returns HTTP 503 if SQLite is unavailable and reports stale workers and
+  destination failures in its JSON. Docker runs `healthcheck.sh` automatically.
+- SQLite is the authoritative delivery queue. Moves to/from the dead-letter queue
+  are transactional. Graceful shutdown flushes partial reception/aggregation buffers.
+- Queued delivery is at least once: a crash after acceptance by a destination but
+  before acknowledgment commits may cause a duplicate. Reception/aggregation buffers
+  remain in memory; forced termination before enqueue can lose buffered events.
+  ntfy cache replay across restarts is not implemented.
+- Backups use SQLite's online backup API and include committed WAL data, producing
+  `.db` and `.db.gz` files in `BACKUP_DIR`.

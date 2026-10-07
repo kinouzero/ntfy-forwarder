@@ -24,6 +24,7 @@ async def digest_loop():
                     topic=key,
                     count=count,
                 )
+                digest_buffer.pop(key, None)
                 continue
 
             if count > 10:
@@ -39,4 +40,8 @@ async def digest_loop():
                     }
                 )
 
-        digest_buffer.clear()
+            remaining = digest_buffer.get(key, 0) - count
+            if remaining > 0:
+                digest_buffer[key] = remaining
+            else:
+                digest_buffer.pop(key, None)

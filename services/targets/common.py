@@ -1,3 +1,5 @@
+import math
+
 import aiohttp
 
 from core.http import get_http_session
@@ -37,11 +39,16 @@ async def post_json(channel, url, payload, headers=None):
             body = await resp.text()
             if resp.status >= 400:
                 retryable = resp.status == 429 or resp.status >= 500
+                try:
+                    retry_after = max(1, math.ceil(float(resp.headers.get("Retry-After", "0"))))
+                except (ValueError, OverflowError):
+                    retry_after = None
                 raise DeliveryError(
                     channel,
                     f"{channel} HTTP {resp.status}: {body[:300]}",
                     status_code=resp.status,
                     retryable=retryable,
+                    retry_after=retry_after if resp.headers.get("Retry-After") else None,
                 )
     except aiohttp.ClientError as exc:
         raise DeliveryError(channel, str(exc), retryable=True) from exc

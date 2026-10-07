@@ -52,8 +52,6 @@ async def tg_call(method, payload, token):
                 retryable = False
                 if status_code == 429:
                     retryable = True
-                elif status_code >= 500:
-                    retryable = True
                 raise TelegramAPIError(
                     description,
                     status_code=status_code,

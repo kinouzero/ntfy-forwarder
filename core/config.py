@@ -19,8 +19,8 @@ MAX_DIGEST_BUFFER = 1000
 QUIET_HOURS_START = 23
 QUIET_HOURS_END = 7
 
-EXPORT_DIR = "/app/data/exports"
-BACKUP_DIR = "/app/data/backups"
+EXPORT_DIR = os.getenv("EXPORT_DIR", os.path.join(os.path.dirname(DB_PATH), "exports"))
+BACKUP_DIR = os.getenv("BACKUP_DIR", os.path.join(os.path.dirname(DB_PATH), "backups"))
 
 DB_BATCH_SIZE = 1
 DB_BATCH_FLUSH_SECONDS = 1

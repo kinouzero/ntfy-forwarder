@@ -4,31 +4,35 @@ import time
 from db.client import db
 
 
-async def move_to_dead_letter(payload, attempts, last_error, topic=None):
+async def move_to_dead_letter(payload, attempts, last_error, topic=None, queue_item_id=None):
     conn = await db()
-    await conn.execute(
-        '''
-        INSERT INTO telegram_dead_letter(
-            payload,
-            topic,
-            last_error,
-            attempts,
-            created_at,
-            updated_at
+    try:
+        await conn.execute(
+            '''
+            INSERT INTO telegram_dead_letter(
+                payload,
+                topic,
+                last_error,
+                attempts,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                json.dumps(payload, ensure_ascii=True),
+                topic,
+                str(last_error),
+                int(attempts),
+                int(time.time()),
+                int(time.time()),
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ''',
-        (
-            json.dumps(payload, ensure_ascii=True),
-            topic,
-            str(last_error),
-            int(attempts),
-            int(time.time()),
-            int(time.time()),
-        ),
-    )
-    await conn.commit()
-    await conn.close()
+        if queue_item_id is not None:
+            await conn.execute("DELETE FROM telegram_queue WHERE id = ?", (int(queue_item_id),))
+        await conn.commit()
+    finally:
+        await conn.close()
 
 
 async def list_dead_letters(limit=200):
@@ -65,88 +69,105 @@ async def query_dead_letters(
     query=None,
 ):
     conn = await db()
-    where, params = _build_dead_letter_filters(
-        topic=topic,
-        reason=reason,
-        query=query,
-    )
-    cur = await conn.execute(
-        f'''
-        SELECT id, payload, topic, last_error, attempts, created_at, updated_at
-        FROM telegram_dead_letter
-        {where}
-        ORDER BY id DESC
-        LIMIT ?
-        OFFSET ?
-        ''',
-        (
-            *params,
-            int(limit),
-            int(offset),
-        ),
-    )
-    rows = await cur.fetchall()
-    cur = await conn.execute(
-        f'''
-        SELECT COUNT(*) AS c
-        FROM telegram_dead_letter
-        {where}
-        ''',
-        tuple(params),
-    )
-    total = int((await cur.fetchone())["c"] or 0)
-    await conn.close()
-    return {
-        "total": total,
-        "items": [
-            {
-                "id": int(row["id"]),
-                "payload": json.loads(row["payload"]),
-                "topic": row["topic"],
-                "last_error": row["last_error"],
-                "attempts": int(row["attempts"] or 0),
-                "created_at": int(row["created_at"] or 0),
-                "updated_at": int(row["updated_at"] or 0),
-            }
-            for row in rows
-        ],
-    }
+    try:
+        where, params = _build_dead_letter_filters(
+            topic=topic,
+            reason=reason,
+            query=query,
+        )
+        cur = await conn.execute(
+            f'''
+            SELECT id, payload, topic, last_error, attempts, created_at, updated_at
+            FROM telegram_dead_letter
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            OFFSET ?
+            ''',
+            (
+                *params,
+                int(limit),
+                int(offset),
+            ),
+        )
+        rows = await cur.fetchall()
+        cur = await conn.execute(
+            f'''
+            SELECT COUNT(*) AS c
+            FROM telegram_dead_letter
+            {where}
+            ''',
+            tuple(params),
+        )
+        total = int((await cur.fetchone())["c"] or 0)
+        return {
+            "total": total,
+            "items": [
+                {
+                    "id": int(row["id"]),
+                    "payload": json.loads(row["payload"]),
+                    "topic": row["topic"],
+                    "last_error": row["last_error"],
+                    "attempts": int(row["attempts"] or 0),
+                    "created_at": int(row["created_at"] or 0),
+                    "updated_at": int(row["updated_at"] or 0),
+                }
+                for row in rows
+            ],
+        }
+    finally:
+        await conn.close()
 
 
 async def get_dead_letter(item_id):
     conn = await db()
-    cur = await conn.execute(
-        '''
-        SELECT id, payload, topic, last_error, attempts
-        FROM telegram_dead_letter
-        WHERE id = ?
-        ''',
-        (int(item_id),),
-    )
-    row = await cur.fetchone()
-    await conn.close()
-    if row is None:
-        return None
-    return {
-        "id": int(row["id"]),
-        "payload": json.loads(row["payload"]),
-        "topic": row["topic"],
-        "last_error": row["last_error"],
-        "attempts": int(row["attempts"] or 0),
-    }
+    try:
+        cur = await conn.execute(
+            '''
+            SELECT id, payload, topic, last_error, attempts
+            FROM telegram_dead_letter
+            WHERE id = ?
+            ''',
+            (int(item_id),),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "payload": json.loads(row["payload"]),
+            "topic": row["topic"],
+            "last_error": row["last_error"],
+            "attempts": int(row["attempts"] or 0),
+        }
+    finally:
+        await conn.close()
 
 
 async def delete_dead_letter(item_id):
     conn = await db()
-    await conn.execute(
-        '''
-        DELETE FROM telegram_dead_letter
-        WHERE id = ?
-        ''',
-        (int(item_id),),
-    )
-    await conn.commit()
-    await conn.close()
+    try:
+        cur = await conn.execute(
+            '''
+            SELECT COUNT(*) AS c
+            FROM telegram_dead_letter
+            WHERE id = ?
+            ''',
+            (int(item_id),),
+        )
+        row = await cur.fetchone()
+        existing = int(row["c"] or 0)
+        await conn.execute(
+            '''
+            DELETE FROM telegram_dead_letter
+            WHERE id = ?
+            ''',
+            (int(item_id),),
+        )
+        await conn.commit()
+        return 1 if existing > 0 else 0
+    finally:
+        await conn.close()
 
 
 async def delete_dead_letters(ids):
@@ -154,56 +175,97 @@ async def delete_dead_letters(ids):
     if not ids:
         return 0
     conn = await db()
-    placeholders = ",".join("?" for _ in ids)
-    await conn.execute(
-        f'''
-        DELETE FROM telegram_dead_letter
-        WHERE id IN ({placeholders})
-        ''',
-        tuple(ids),
-    )
-    await conn.commit()
-    await conn.close()
-    return len(ids)
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        await conn.execute(
+            f'''
+            DELETE FROM telegram_dead_letter
+            WHERE id IN ({placeholders})
+            ''',
+            tuple(ids),
+        )
+        await conn.commit()
+        return len(ids)
+    finally:
+        await conn.close()
 
 
 async def clear_dead_letters(topic=None, reason=None, query=None):
     conn = await db()
-    where, params = _build_dead_letter_filters(
-        topic=topic,
-        reason=reason,
-        query=query,
-    )
-    cur = await conn.execute(
-        f'''
-        SELECT COUNT(*) AS c
-        FROM telegram_dead_letter
-        {where}
-        ''',
-        tuple(params),
-    )
-    row = await cur.fetchone()
-    count = int(row["c"] or 0)
-    await conn.execute(
-        f'''
-        DELETE FROM telegram_dead_letter
-        {where}
-        ''',
-        tuple(params),
-    )
-    await conn.commit()
-    await conn.close()
-    return count
+    try:
+        where, params = _build_dead_letter_filters(
+            topic=topic,
+            reason=reason,
+            query=query,
+        )
+        cur = await conn.execute(
+            f'''
+            SELECT COUNT(*) AS c
+            FROM telegram_dead_letter
+            {where}
+            ''',
+            tuple(params),
+        )
+        row = await cur.fetchone()
+        count = int(row["c"] or 0)
+        await conn.execute(
+            f'''
+            DELETE FROM telegram_dead_letter
+            {where}
+            ''',
+            tuple(params),
+        )
+        await conn.commit()
+        return count
+    finally:
+        await conn.close()
 
 
 async def count_dead_letters():
     conn = await db()
-    cur = await conn.execute(
-        '''
-        SELECT COUNT(*) AS c
-        FROM telegram_dead_letter
-        '''
-    )
-    row = await cur.fetchone()
-    await conn.close()
-    return int(row["c"] or 0)
+    try:
+        cur = await conn.execute(
+            '''
+            SELECT COUNT(*) AS c
+            FROM telegram_dead_letter
+            '''
+        )
+        row = await cur.fetchone()
+        return int(row["c"] or 0)
+    finally:
+        await conn.close()
+
+
+async def requeue_dead_letter(item_id):
+    """Move one item back to the queue in a single transaction."""
+    from models.event import NtfyEvent
+    from services.formatter import build_message
+
+    conn = await db()
+    try:
+        await conn.execute("BEGIN IMMEDIATE")
+        cursor = await conn.execute(
+            "SELECT payload, topic FROM telegram_dead_letter WHERE id = ?", (int(item_id),)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        payload = json.loads(row["payload"])
+        if isinstance(payload, dict):
+            payload.setdefault("topic", row["topic"])
+            if payload.get("event") == "message":
+                event = NtfyEvent.from_json(payload["topic"], payload)
+                payload = {
+                    "topic": event.topic, "message": build_message(event),
+                    "priority": event.priority,
+                    "attachment_url": (event.attachment or {}).get("url"),
+                }
+        await conn.execute(
+            "INSERT INTO telegram_queue(payload, created_at, attempts, next_attempt_at) "
+            "VALUES (?, ?, 0, 0)", (json.dumps(payload), int(time.time())),
+        )
+        await conn.execute("DELETE FROM telegram_dead_letter WHERE id = ?", (int(item_id),))
+        await conn.commit()
+        return True
+    finally:
+        await conn.close()

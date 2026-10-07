@@ -16,7 +16,6 @@ async def test_health_endpoint(monkeypatch):
     async def _dead():
         return 0
     monkeypatch.setattr("api.web.count_dead_letters", _dead)
-    monkeypatch.setattr("api.web.ACTIVE_TARGETS", ())
 
     class _Conn:
         async def execute(self, *_a, **_kw):

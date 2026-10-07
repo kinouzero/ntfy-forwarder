@@ -7,9 +7,10 @@ import html
 import io
 import json
 import secrets
+import sqlite3
 import time
 from collections import deque
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import jwt
 from aiohttp import web
@@ -70,13 +71,11 @@ from db.telegram_queue import count_telegram_queue
 from db.errors import query_errors, count_errors_since, clear_errors, log_error
 from db.dead_letter import (
     query_dead_letters,
-    get_dead_letter,
+    requeue_dead_letter,
     delete_dead_letter,
-    delete_dead_letters,
     clear_dead_letters,
     count_dead_letters,
 )
-from db.telegram_queue import enqueue_telegram_item
 from db.client import db
 from services.telegram import tg_call
 from services.ntfy import ntfy_worker
@@ -137,7 +136,7 @@ def _get_access_token(request):
 def _token_matches(expected, provided):
     if not expected or not provided:
         return False
-    return hmac.compare_digest(str(expected), str(provided))
+    return hmac.compare_digest(str(expected).encode(), str(provided).encode())
 
 
 def _request_is_secure(request):
@@ -228,7 +227,10 @@ def _read_signed_cookie_value(raw):
     payload = _unsign_payload(raw)
     if not isinstance(payload, dict):
         return None
-    if int(payload.get("exp", 0)) <= int(time.time()):
+    try:
+        if int(payload.get("exp", 0)) <= int(time.time()):
+            return None
+    except (TypeError, ValueError, OverflowError):
         return None
     return payload
 
@@ -258,9 +260,16 @@ def _sanitize_next_path(next_path):
     value = str(next_path or "/").strip()
     if not value.startswith("/"):
         return "/"
-    if value.startswith("//"):
+    if value.startswith("//") or "\\" in value or any(ord(c) < 32 for c in value):
         return "/"
     return value
+
+
+def _parse_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise web.HTTPBadRequest(text="expected an integer") from exc
 
 
 def _clean_optional_str(value):
@@ -371,6 +380,8 @@ def _raise_admin_html_unavailable():
 
 
 def _login_page_html(next_path, error=""):
+    oidc_login_url = html.escape("/auth/login?" + urlencode({"next": next_path}))
+    next_path = html.escape(next_path, quote=True)
     error_html = ""
     if error:
         error_html = (
@@ -391,7 +402,7 @@ def _login_page_html(next_path, error=""):
             icon_html = f'<i class="bi {icon_class}"></i>'
         oidc_btn = (
             f'<a class="btn btn-outline-secondary w-100 d-flex align-items-center '
-            f'justify-content-center gap-2 oidc-btn" href="/auth/login?next={next_path}">'
+            f'justify-content-center gap-2 oidc-btn" href="{oidc_login_url}">'
             f"{icon_html} {btn_text}"
             "</a>"
         )
@@ -598,15 +609,16 @@ async def _fetch_oidc_discovery():
             raise RuntimeError(
                 f"OIDC discovery failed: {resp.status} {text[:200]}"
             )
-        _OIDC_DISCOVERY_CACHE = await resp.json()
-    issuer = str(_OIDC_DISCOVERY_CACHE.get("issuer", "")).rstrip("/")
+        discovery = await resp.json()
+    issuer = str(discovery.get("issuer", "")).rstrip("/")
     configured = str(OIDC_ISSUER_URL).rstrip("/")
     if issuer not in {"", configured}:
         raise RuntimeError("OIDC issuer mismatch")
     for key in ("authorization_endpoint", "token_endpoint"):
-        if not _OIDC_DISCOVERY_CACHE.get(key):
+        if not discovery.get(key):
             raise RuntimeError(f"OIDC discovery missing {key}")
-    return _OIDC_DISCOVERY_CACHE
+    _OIDC_DISCOVERY_CACHE = discovery
+    return discovery
 
 
 async def _fetch_oidc_jwks(discovery):
@@ -818,6 +830,8 @@ async def oidc_callback(request):
         profile = await _fetch_oidc_userinfo(access_token, discovery)
     except Exception:
         profile = {}
+    if profile.get("sub") and profile["sub"] != claims.get("sub"):
+        raise web.HTTPUnauthorized(text="userinfo subject mismatch")
     merged_profile = dict(claims)
     merged_profile.update(
         {k: v for k, v in profile.items() if k not in {"sub"}}
@@ -861,6 +875,8 @@ async def security_headers_middleware(request, handler):
         response = await handler(request)
     except web.HTTPException as exc:
         response = exc
+    except sqlite3.IntegrityError:
+        response = web.HTTPConflict(text="a record with this name already exists")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -882,6 +898,8 @@ async def security_headers_middleware(request, handler):
             "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         ),
     )
+    if isinstance(response, web.HTTPException):
+        raise response
     return response
 
 
@@ -933,24 +951,28 @@ def _start_worker(name):
 
 
 async def health(request):
-    queue_count = await count_telegram_queue()
-    dead_count = await count_dead_letters()
-    telegram_queue_size.set(queue_count)
-    telegram_dead_letter_size.set(dead_count)
+    queue_count = dead_count = 0
     now = int(time.time())
 
     db_ok = True
     db_error = None
+    conn = None
     try:
+        queue_count = await count_telegram_queue()
+        dead_count = await count_dead_letters()
+        telegram_queue_size.set(queue_count)
+        telegram_dead_letter_size.set(dead_count)
         conn = await db()
         await conn.execute("CREATE TEMP TABLE IF NOT EXISTS _health_rw(ts INTEGER)")
         await conn.execute("INSERT INTO _health_rw(ts) VALUES(?)", (now,))
         await conn.execute("DELETE FROM _health_rw WHERE ts = ?", (now,))
         await conn.commit()
-        await conn.close()
     except Exception as exc:
         db_ok = False
         db_error = str(exc)
+    finally:
+        if conn is not None:
+            await conn.close()
 
     worker_ages = {}
     stale_workers = 0
@@ -1047,7 +1069,7 @@ async def health(request):
                 "max_last_seen_age_seconds": max_worker_age,
             },
         },
-    })
+    }, status=200 if db_ok else 503)
 
 async def metrics(request):
 
@@ -2727,6 +2749,8 @@ async def settings_update_api(request):
         payload = await request.json()
     except Exception as exc:
         raise web.HTTPBadRequest(text=f"invalid json: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise web.HTTPBadRequest(text="settings payload must be an object")
     values = await update_settings(payload)
     return web.json_response({"saved": True, "values": values})
 
@@ -3167,6 +3191,8 @@ async def topic_toggle(request):
 
 
 def _validate_target_payload(data):
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text="target payload must be an object")
     name = str(data.get("name", "")).strip()
     kind = str(data.get("kind", "")).strip()
     config = data.get("config")
@@ -3188,7 +3214,7 @@ def _validate_target_payload(data):
             raise web.HTTPBadRequest(
                 text="telegram config.max_message_length must be an integer"
             ) from exc
-        max_message_length = max(256, min(max_message_length, 20000))
+        max_message_length = max(256, min(max_message_length, 4096))
         if not chat_id or not bot_token:
             raise web.HTTPBadRequest(
                 text="telegram target requires config.chat_id + config.bot_token"
@@ -3200,8 +3226,9 @@ def _validate_target_payload(data):
         }
     else:
         url = str(config.get("url", "")).strip()
-        if not url:
-            raise web.HTTPBadRequest(text="webhook target requires config.url")
+        parsed_url = urlsplit(url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+            raise web.HTTPBadRequest(text="webhook target requires an HTTP(S) config.url")
         auth_header = str(config.get("auth_header", "")).strip()
         config = {"url": url, "auth_header": auth_header}
     return name, kind, config, enabled, is_default
@@ -3232,7 +3259,7 @@ async def targets_create(request):
 
 async def targets_update(request):
     _require_admin(request)
-    target_id = int(request.match_info["id"])
+    target_id = _parse_int(request.match_info["id"])
     target = await get_delivery_target(target_id)
     if target is None:
         raise web.HTTPNotFound()
@@ -3253,7 +3280,7 @@ async def targets_update(request):
 
 async def targets_delete(request):
     _require_admin(request)
-    target_id = int(request.match_info["id"])
+    target_id = _parse_int(request.match_info["id"])
     target = await get_delivery_target(target_id)
     if target is None:
         raise web.HTTPNotFound()
@@ -3263,7 +3290,7 @@ async def targets_delete(request):
 
 async def targets_set_default(request):
     _require_admin(request)
-    target_id = int(request.match_info["id"])
+    target_id = _parse_int(request.match_info["id"])
     target = await get_delivery_target(target_id)
     if target is None:
         raise web.HTTPNotFound()
@@ -3282,10 +3309,12 @@ async def topic_set_target(request):
         data = await request.json()
     except Exception as exc:
         raise web.HTTPBadRequest(text=f"invalid json: {exc}") from exc
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text="payload must be an object")
     target_id_raw = data.get("target_id")
     target_id = None
     if target_id_raw not in (None, "", "null"):
-        target_id = int(target_id_raw)
+        target_id = _parse_int(target_id_raw)
         target = await get_delivery_target(target_id)
         if target is None:
             raise web.HTTPBadRequest(text="unknown target_id")
@@ -3413,6 +3442,8 @@ def _parse_import_topics(data):
     else:
         raise web.HTTPBadRequest(text="invalid payload")
 
+    if not isinstance(items, list):
+        raise web.HTTPBadRequest(text="items must be a list")
     parsed = []
     for item in items:
         if isinstance(item, str):
@@ -4905,9 +4936,9 @@ async def stats_api(request):
 
 async def errors_api(request):
     _require_admin(request)
-    limit = int(request.query.get("limit", "100"))
+    limit = _parse_int(request.query.get("limit", "100"))
     limit = max(1, min(limit, 1000))
-    offset = int(request.query.get("offset", "0"))
+    offset = _parse_int(request.query.get("offset", "0"))
     offset = max(0, offset)
     query = request.query.get("q", "").strip() or None
     component = request.query.get("component", "").strip() or None
@@ -4959,9 +4990,9 @@ async def errors_clear_api(request):
 
 async def dead_letters_api(request):
     _require_admin(request)
-    limit = int(request.query.get("limit", "200"))
+    limit = _parse_int(request.query.get("limit", "200"))
     limit = max(1, min(limit, 1000))
-    offset = int(request.query.get("offset", "0"))
+    offset = _parse_int(request.query.get("offset", "0"))
     offset = max(0, offset)
     topic = request.query.get("topic", "").strip() or None
     reason = request.query.get("reason", "").strip() or None
@@ -4987,24 +5018,24 @@ async def dead_letters_api(request):
 
 async def dead_letter_requeue_api(request):
     _require_admin(request)
-    item_id = int(request.match_info["id"])
-    item = await get_dead_letter(item_id)
-    if item is None:
-        raise web.HTTPNotFound()
-    await enqueue_telegram_item(item["payload"])
-    deleted = await delete_dead_letter(item_id)
-    if deleted <= 0:
+    item_id = _parse_int(request.match_info["id"])
+    if not await requeue_dead_letter(item_id):
         raise web.HTTPNotFound()
     return web.json_response({"requeued": item_id})
 
 
 async def dead_letter_requeue_batch_api(request):
     _require_admin(request)
-    data = await request.json()
+    try:
+        data = await request.json()
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text="invalid json") from exc
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text="payload must be an object")
     topic = _clean_optional_str(data.get("topic"))
     reason = _clean_optional_str(data.get("reason"))
     query = _clean_optional_str(data.get("q"))
-    max_items = int(data.get("limit", 0))
+    max_items = _parse_int(data.get("limit", 0))
     if max_items < 0:
         max_items = 0
     batch_size = 200
@@ -5031,9 +5062,9 @@ async def dead_letter_requeue_batch_api(request):
         ids = []
         for item in items:
             try:
-                await enqueue_telegram_item(item["payload"])
-                ids.append(item["id"])
-                requeued += 1
+                if await requeue_dead_letter(item["id"]):
+                    ids.append(item["id"])
+                    requeued += 1
             except Exception as exc:
                 failed += 1
                 await log_error(
@@ -5041,9 +5072,7 @@ async def dead_letter_requeue_batch_api(request):
                     item.get("topic"),
                     str(exc),
                 )
-        if ids:
-            await delete_dead_letters(ids)
-        else:
+        if not ids:
             break
     return web.json_response(
         {
@@ -5055,7 +5084,7 @@ async def dead_letter_requeue_batch_api(request):
 
 async def dead_letter_delete_api(request):
     _require_admin(request)
-    item_id = int(request.match_info["id"])
+    item_id = _parse_int(request.match_info["id"])
     deleted = await delete_dead_letter(item_id)
     if deleted <= 0:
         raise web.HTTPNotFound()
@@ -5146,6 +5175,7 @@ async def create_web_app():
         "/api/topics",
         topics_list,
     )
+    app.router.add_get("/api/topics/export", topics_export)
     app.router.add_get(
         "/api/topics/{name}",
         topic_detail,
@@ -5181,10 +5211,6 @@ async def create_web_app():
     app.router.add_post(
         "/api/topics/hard_clear_all",
         hard_clear_all,
-    )
-    app.router.add_get(
-        "/api/topics/export",
-        topics_export,
     )
     app.router.add_post(
         "/api/topics/import",

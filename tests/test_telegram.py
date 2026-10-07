@@ -1,6 +1,9 @@
 import pytest
+from unittest.mock import AsyncMock
 
 from services import telegram
+
+TARGET = {"kind": "telegram", "config": {"chat_id": "1", "bot_token": "fake"}}
 
 
 class _Resp:
@@ -41,15 +44,10 @@ async def test_tg_call_uses_http_session(monkeypatch):
         "get_http_session",
         lambda: session,
     )
-    monkeypatch.setattr(
-        telegram,
-        "TG_API",
-        "https://example.test/botXXX",
-    )
 
     result = await telegram.tg_call(
         "sendMessage",
-        {"chat_id": "1", "text": "hi"},
+        {"chat_id": "1", "text": "hi"}, token="fake",
     )
 
     assert len(session.called) == 1
@@ -60,11 +58,6 @@ async def test_tg_call_uses_http_session(monkeypatch):
 async def test_tg_call_requires_token(monkeypatch):
     monkeypatch.setattr(
         telegram,
-        "TG_API",
-        None,
-    )
-    monkeypatch.setattr(
-        telegram,
         "get_http_session",
         lambda: None,
     )
@@ -72,16 +65,17 @@ async def test_tg_call_requires_token(monkeypatch):
     with pytest.raises(RuntimeError):
         await telegram.tg_call(
             "sendMessage",
-            {"chat_id": "1", "text": "hi"},
+            {"chat_id": "1", "text": "hi"}, token="",
         )
 
 
 @pytest.mark.asyncio
 async def test_process_message_success(monkeypatch):
     from tasks import delivery_sender as telegram_sender
-    monkeypatch.setattr(telegram_sender, "ACTIVE_TARGETS", ("telegram",))
+    monkeypatch.setattr(telegram_sender, "resolve_delivery_target_for_topic",
+                        AsyncMock(return_value=TARGET))
 
-    async def ok_send(_m, attachment_url=None, priority=3):
+    async def ok_send(_target, _m, attachment_url=None, priority=3):
         return None
 
     monkeypatch.setattr(
@@ -98,7 +92,8 @@ async def test_process_message_success(monkeypatch):
 async def test_process_message_retries_and_fails(monkeypatch):
     from tasks import delivery_sender as telegram_sender
     from services.telegram import TelegramAPIError
-    monkeypatch.setattr(telegram_sender, "ACTIVE_TARGETS", ("telegram",))
+    monkeypatch.setattr(telegram_sender, "resolve_delivery_target_for_topic",
+                        AsyncMock(return_value=TARGET))
 
     monkeypatch.setattr(
         telegram_sender,
@@ -136,7 +131,7 @@ async def test_process_queue_item_accepts_legacy_string(monkeypatch):
 
     calls = []
 
-    async def ok_process(message, attachment_url=None, priority=3):
+    async def ok_process(message, attachment_url=None, priority=3, topic=None):
         calls.append(message)
         return True
 
@@ -159,16 +154,11 @@ async def test_tg_call_raises_on_telegram_error(monkeypatch):
         "get_http_session",
         lambda: session,
     )
-    monkeypatch.setattr(
-        telegram,
-        "TG_API",
-        "https://example.test/botXXX",
-    )
 
     with pytest.raises(RuntimeError, match="CHAT_NOT_FOUND"):
         await telegram.tg_call(
             "sendMessage",
-            {"chat_id": "0", "text": "x"},
+            {"chat_id": "0", "text": "x"}, token="fake",
         )
 
 
@@ -179,10 +169,9 @@ async def test_tg_call_429_is_retryable(monkeypatch):
         status=429,
     )
     monkeypatch.setattr(telegram, "get_http_session", lambda: session)
-    monkeypatch.setattr(telegram, "TG_API", "https://example.test/botXXX")
 
     with pytest.raises(telegram.TelegramAPIError) as exc:
-        await telegram.tg_call("sendMessage", {"chat_id": "1", "text": "x"})
+        await telegram.tg_call("sendMessage", {"chat_id": "1", "text": "x"}, token="fake")
 
     assert exc.value.retryable is True
     assert exc.value.retry_after == 8
@@ -194,15 +183,14 @@ async def test_send_telegram_message_sends_attachment(monkeypatch):
 
     calls = []
 
-    async def fake_tg_call(method, payload):
+    async def fake_tg_call(method, payload, token):
         calls.append((method, payload))
         return {"ok": True}
 
-    monkeypatch.setattr(telegram_sender, "tg_call", fake_tg_call)
-    monkeypatch.setattr(telegram_sender, "TELEGRAM_MAX_MESSAGE_LENGTH", 4096)
+    monkeypatch.setattr(telegram_sender.telegram_target_impl, "tg_call", fake_tg_call)
 
     await telegram_sender.send_telegram_message(
-        "hello",
+        TARGET, "hello",
         attachment_url="https://example.com/file.txt",
         priority=1,
     )
@@ -219,14 +207,13 @@ async def test_send_telegram_message_high_priority_not_silent(monkeypatch):
 
     calls = []
 
-    async def fake_tg_call(method, payload):
+    async def fake_tg_call(method, payload, token):
         calls.append((method, payload))
         return {"ok": True}
 
-    monkeypatch.setattr(telegram_sender, "tg_call", fake_tg_call)
-    monkeypatch.setattr(telegram_sender, "TELEGRAM_MAX_MESSAGE_LENGTH", 4096)
+    monkeypatch.setattr(telegram_sender.telegram_target_impl, "tg_call", fake_tg_call)
 
-    await telegram_sender.send_telegram_message("hello", priority=5)
+    await telegram_sender.send_telegram_message(TARGET, "hello", priority=5)
 
     assert calls[0][0] == "sendMessage"
     assert calls[0][1]["disable_notification"] is False
@@ -239,7 +226,7 @@ async def test_send_telegram_message_fallbacks_to_plain_text_on_markdown_error(m
 
     calls = []
 
-    async def fake_tg_call(method, payload):
+    async def fake_tg_call(method, payload, token):
         calls.append((method, payload))
         if len(calls) == 1:
             raise TelegramAPIError(
@@ -249,10 +236,9 @@ async def test_send_telegram_message_fallbacks_to_plain_text_on_markdown_error(m
             )
         return {"ok": True}
 
-    monkeypatch.setattr(telegram_sender, "tg_call", fake_tg_call)
-    monkeypatch.setattr(telegram_sender, "TELEGRAM_MAX_MESSAGE_LENGTH", 4096)
+    monkeypatch.setattr(telegram_sender.telegram_target_impl, "tg_call", fake_tg_call)
 
-    await telegram_sender.send_telegram_message("hello-world", priority=3)
+    await telegram_sender.send_telegram_message(TARGET, "hello-world", priority=3)
 
     assert len(calls) == 2
     assert calls[0][0] == "sendMessage"
@@ -269,7 +255,7 @@ async def test_process_queue_item_marks_non_retryable_dead(monkeypatch):
     async def enabled(_topic):
         return True
 
-    async def fail(_message, attachment_url=None, priority=3):
+    async def fail(_message, attachment_url=None, priority=3, topic=None):
         raise TelegramAPIError(
             "forbidden",
             status_code=403,
@@ -281,6 +267,9 @@ async def test_process_queue_item_marks_non_retryable_dead(monkeypatch):
     async def _noop(*_a, **_kw):
         return None
     monkeypatch.setattr(telegram_sender, "log_error", _noop)
+    from db.settings import SETTINGS_DEFAULTS
+    monkeypatch.setattr(telegram_sender, "get_settings_snapshot",
+                        AsyncMock(return_value=SETTINGS_DEFAULTS))
 
     status, delay, reason = await telegram_sender.process_queue_item(
         {"topic": "t1", "message": "hello", "attempts": 2}

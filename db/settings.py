@@ -82,16 +82,18 @@ def _sanitize_settings(values):
 
 async def _read_all_settings():
     conn = await db()
-    cur = await conn.execute("SELECT key, value FROM app_settings")
-    rows = await cur.fetchall()
-    await conn.close()
-    values = dict(SETTINGS_DEFAULTS)
-    for row in rows:
-        key = row["key"]
-        if key not in SETTINGS_DEFAULTS:
-            continue
-        values[key] = _coerce_setting(key, row["value"])
-    return _sanitize_settings(values)
+    try:
+        cur = await conn.execute("SELECT key, value FROM app_settings")
+        rows = await cur.fetchall()
+        values = dict(SETTINGS_DEFAULTS)
+        for row in rows:
+            key = row["key"]
+            if key not in SETTINGS_DEFAULTS:
+                continue
+            values[key] = _coerce_setting(key, row["value"])
+        return _sanitize_settings(values)
+    finally:
+        await conn.close()
 
 
 async def get_settings_snapshot(force_refresh=False):
@@ -117,16 +119,18 @@ async def update_settings(values):
         return await get_settings_snapshot(force_refresh=True)
 
     conn = await db()
-    for key, raw_value in values.items():
-        if key not in SETTINGS_DEFAULTS:
-            continue
-        coerced = _coerce_setting(key, raw_value)
-        await conn.execute(
-            "INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET "
-            "value = excluded.value, updated_at = excluded.updated_at",
-            (key, str(coerced), int(time.time())),
-        )
-    await conn.commit()
-    await conn.close()
-    return await get_settings_snapshot(force_refresh=True)
+    try:
+        for key, raw_value in values.items():
+            if key not in SETTINGS_DEFAULTS:
+                continue
+            coerced = _coerce_setting(key, raw_value)
+            await conn.execute(
+                "INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value = excluded.value, updated_at = excluded.updated_at",
+                (key, str(coerced), int(time.time())),
+            )
+        await conn.commit()
+        return await get_settings_snapshot(force_refresh=True)
+    finally:
+        await conn.close()

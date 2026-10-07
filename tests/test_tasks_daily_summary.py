@@ -54,6 +54,9 @@ async def test_build_daily_summary(monkeypatch):
     assert "Daily Summary" in msg
     assert "Total 24h" in msg
     assert "Dead letters" in msg
+    assert "\n- " not in msg
+    assert "• " in msg
+    assert "\\n" not in msg
 
 
 @pytest.mark.asyncio
@@ -64,16 +67,33 @@ async def test_daily_summary_loop_sends_once(monkeypatch):
         calls.append(payload)
         return 1
 
-    monkeypatch.setattr(daily_summary, "DAILY_SUMMARY_ENABLED", True)
+    async def settings():
+        return {"daily_summary_enabled": True, "daily_summary_hour": 8, "daily_summary_minute": 0}
+    monkeypatch.setattr(daily_summary, "get_settings_snapshot", settings)
     async def _build():
         return "x"
     monkeypatch.setattr(daily_summary, "_build_daily_summary", _build)
     monkeypatch.setattr(daily_summary, "enqueue_telegram", _enqueue)
     monkeypatch.setattr(daily_summary, "_summary_tz", lambda: None)
-    monkeypatch.setattr(daily_summary, "_is_summary_time", lambda _now: True)
+    monkeypatch.setattr(daily_summary, "_should_send_today", lambda _now, last, **kw: last is None)
     monkeypatch.setattr(daily_summary.asyncio, "sleep", await _one_loop_sleep())
 
     with pytest.raises(asyncio.CancelledError):
         await daily_summary.daily_summary_loop()
 
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("hour,minute,last_sent,expected", [
+    (7, 59, None, False),
+    (8, 0, None, True),
+    (8, 30, None, True),
+    (9, 0, None, True),
+    (9, 0, "2026-10-07", False),
+    (9, 0, "2026-10-06", True),
+])
+def test_summary_schedule_once_per_day(hour, minute, last_sent, expected):
+    from datetime import datetime
+
+    now = datetime(2026, 10, 7, hour, minute)
+    assert daily_summary._should_send_today(now, last_sent) is expected

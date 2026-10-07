@@ -14,33 +14,39 @@ async def retention_loop():
 
         conn = await db()
 
-        msg_limit = (
-            int(time.time())
-            - (retention_days * 86400)
-        )
+        try:
+            msg_limit = (
+                int(time.time())
+                - (retention_days * 86400)
+            )
 
-        err_limit = (
-            int(time.time())
-            - (error_retention_days * 86400)
-        )
+            err_limit = (
+                int(time.time())
+                - (error_retention_days * 86400)
+            )
 
-        await conn.execute(
-            '''
-            DELETE FROM messages
-            WHERE created_at < ?
-            ''',
-            (msg_limit,),
-        )
+            await conn.execute(
+                '''
+                DELETE FROM messages
+                WHERE created_at < ?
+                ''',
+                (msg_limit,),
+            )
 
-        await conn.execute(
-            '''
-            DELETE FROM errors
-            WHERE ts < ?
-            ''',
-            (err_limit,),
-        )
+            await conn.execute(
+                '''
+                DELETE FROM errors
+                WHERE ts < ?
+                ''',
+                (err_limit,),
+            )
 
-        await conn.commit()
-        await conn.close()
+            await conn.execute("DELETE FROM messages_fts")
+            await conn.execute(
+                "INSERT INTO messages_fts(topic, message) SELECT topic, message FROM messages"
+            )
+            await conn.commit()
+        finally:
+            await conn.close()
 
         await asyncio.sleep(86400)

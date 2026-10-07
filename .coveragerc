@@ -1,0 +1,8 @@
+[run]
+branch = True
+source = app,api,core,db,models,services,tasks,utils
+
+[report]
+show_missing = True
+precision = 2
+fail_under = 100

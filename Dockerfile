@@ -22,4 +22,7 @@ RUN mkdir -p /app/data && chown -R app:app /app
 
 USER app
 
+HEALTHCHECK --interval=30s --timeout=15s --start-period=15s --retries=3 \
+    CMD ["/app/healthcheck.sh"]
+
 CMD ["python3", "/app/app.py"]

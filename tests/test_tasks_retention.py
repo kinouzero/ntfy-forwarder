@@ -50,8 +50,9 @@ async def test_retention_deletes_old_rows(tmp_db_paths, monkeypatch):
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(retention, "RETENTION_DAYS", 1)
-    monkeypatch.setattr(retention, "ERROR_RETENTION_DAYS", 1)
+    async def settings():
+        return {"retention_days": 1, "error_retention_days": 1}
+    monkeypatch.setattr(retention, "get_settings_snapshot", settings)
     monkeypatch.setattr(retention.time, "time", lambda: now)
     async def _to_thread(fn):
         fn()

@@ -1,4 +1,6 @@
 def split_message(text, max_len):
+    if max_len <= 0:
+        raise ValueError("max_len must be positive")
     if text is None:
         return [""]
 

@@ -6,7 +6,7 @@ async def create_http_session():
 
     global http_session
 
-    if http_session is None:
+    if http_session is None or http_session.closed:
         http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60),
             connector=aiohttp.TCPConnector(

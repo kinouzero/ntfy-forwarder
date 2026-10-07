@@ -28,6 +28,9 @@ class _FakeResponse:
     def __init__(self, line):
         self.content = _FakeContent(line)
 
+    def raise_for_status(self):
+        pass
+
     async def __aenter__(self):
         return self
 
