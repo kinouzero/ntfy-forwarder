@@ -1,5 +1,6 @@
 import asyncio
 import json
+import ssl
 import time
 from unittest.mock import AsyncMock
 
@@ -249,10 +250,29 @@ def test_formatting_edge_cases():
         chunks = split_message(text, 10)
         assert len(chunks) == 2 and all(len(chunk) <= 10 for chunk in chunks)
     assert split_message("a" * 8 + "\n\n", 9) == ["a" * 8]
-    request = make_mocked_request("GET", "https://example.test",
-                                  headers={"Cookie": "access_token=x"})
+
+
+@pytest.mark.parametrize("tls,forwarded_proto,expected_secure", [
+    (False, None, False),
+    (True, None, True),
+    (False, "http", False),
+    (False, "https", True),
+    (False, "HTTPS", True),
+    (True, "http", True),
+])
+def test_request_security_uses_tls_transport_or_forwarded_header(
+    tls, forwarded_proto, expected_secure,
+):
+    headers = {"Cookie": "access_token=x"}
+    if forwarded_proto is not None:
+        headers["X-Forwarded-Proto"] = forwarded_proto
+    # An HTTPS URL alone does not establish TLS on a mocked server request.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER) if tls else None
+    request = make_mocked_request("GET", "/", headers=headers, sslcontext=context)
+    assert request.scheme == ("https" if tls else "http")
     assert api._get_access_token(request) == "x"
-    assert api._request_is_secure(request)
+    assert api._request_is_secure(request) is expected_secure
+    assert api._cookie_kwargs(request, 60)["secure"] is expected_secure
 
 
 @pytest.mark.asyncio
